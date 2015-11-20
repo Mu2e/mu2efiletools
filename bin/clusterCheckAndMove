@@ -1,0 +1,440 @@
+#!/usr/bin/perl -w
+#
+# Checks output of "production" grid jobs (run with mu2eprodsys) and
+# moves them into "good" or other subdirectories, preserving the
+# directory structure a mu2eprodsys cluster outputs.
+# If a good job happens to have a "temporary" directory name
+# used by the outstage  ifdh, the suffix is stripped.
+#
+# A.Gaponenko, 2015
+#
+
+use strict;
+use File::Basename;
+use File::Path;
+use File::stat;
+use Getopt::Long;
+use Digest;
+use Data::Dumper;
+
+my $dsttop;
+my $timecut = 2*3600; # in seconds
+my $verbosity=1;
+my $dryrun=0;
+my %opt = ( dsttop=>\$dsttop, 'verify-data'=>0, 'timecut'=>\$timecut, verbosity=>\$verbosity, 'dry-run'=>\$dryrun, help=>0 );
+
+# constant strings used as keys in the jobStats hash
+use constant GOOD => '0good'; # make it sort first in the summary output.  That string is not exposed.
+# the rest of the strings are used as directory names for failed jobs
+use constant NOLOG => 'nolog';
+use constant LOGCHECK => 'logcheck';
+use constant EXITSTAT => 'exitstat';
+use constant DATASIZE => 'datasize';
+use constant METAPAIRED => 'metapaired';
+use constant DATACHECK => 'datacheck';
+use constant DUPLICATE => 'duplicate';
+my %jobStats;
+
+# A more readable description for the summary output
+my %errorCodes = (
+    GOOD() => 'Good',
+    NOLOG() => 'no unique log file',
+    LOGCHECK() => 'corrupted log file',
+    EXITSTAT() => 'bad exit status',
+    DATASIZE() => 'wrong data or json file size',
+    METAPAIRED() => 'a non-paired content or json file',
+    DATACHECK() => 'corrupted data file',
+    DUPLICATE() => 'duplicate',
+    );
+
+#================================================================
+sub getLogFileName($) {
+    my ($jobdir) = @_;
+    my @list = glob "$jobdir/*.log";
+    return ($#list == 0) ? $list[0] : "";
+}
+
+#================================================================
+sub verifyDigest($$) {
+    my ($fn, $expectedDigest) = @_;
+    my $dig = Digest->new('SHA-256');
+
+    my $ret = 0;
+
+    if(open(my $fh, '<', $fn)) {
+        $dig->addfile($fh);
+        if($dig->hexdigest eq $expectedDigest) {
+            $ret = 1;
+        }
+    }
+
+    return $ret;
+}
+
+#================================================================
+sub processLogFile($) {
+    my ($logFileName) = @_;
+
+    my $payload_started = 0;
+    my $payload_ok = 0;
+    my $manifest_selfhash='';
+
+    # Note: dynamic determination of hash alg would need two passes over $logFileName
+    # We've always been using sha256sum on worker nodes
+    my $loghash = Digest->new('SHA-256');
+
+    my %workerFileSize;
+    my %workerFileDigest;
+
+    if(open(my $logfh, $logFileName)) {
+
+        my $manifest_started = 0;
+
+        while(my $line = <$logfh>) {
+
+            if($line =~ m/^Running the command:.* mu2e /) {
+                $payload_started = 1;
+            }
+
+            if($line =~ m/^mu2egrid exit status 0$/) {
+                $payload_ok = 1;
+            }
+
+            if($manifest_started) {
+                if($line =~ m/^#/) {
+                    # extract file size information from the "ls -l" output
+                    my @fields = split(/\s+/, $line);
+                    if($#fields == 9) {
+                        my $filename = $fields[9];
+                        my $filesize = $fields[5];
+                        $workerFileSize{$filename} = $filesize;
+                    }
+                }
+                else {
+                    # manifest lines not starting with '#' must list dataset files
+                    if($line =~ m/^([[:xdigit:]]+)\s+([^\s]+)$/) {
+                        my $digest = $1;
+                        my $filename = $2;
+                        $workerFileDigest{$filename} = $digest;
+                    }
+                    else {
+                        print "\tError parsing manifest line \"$line\" in $logFileName\n" if $verbosity;
+                        # returning empty list will mark this job as failed
+                        return;
+                    }
+                }
+            }
+
+            if($line =~ m/^# mu2egrid manifest *$/) {
+                $manifest_started = 1;
+            }
+
+            if($line =~ m/^# mu2egrid manifest selfcheck: ([[:xdigit:]]+) *- *$/) {
+                $manifest_selfhash = $1;
+            }
+            else {
+                $loghash->add($line);
+            }
+        }
+
+        return ($manifest_selfhash, $loghash->hexdigest, \%workerFileSize, \%workerFileDigest, $payload_started, $payload_ok);
+    }
+    else {
+        print "\tError opening log file $logFileName\n" if $verbosity;
+    }
+}
+
+#================================================================
+sub maybe_rename($$) {
+    my ($src, $dst) = @_;
+    print "\t", ($dryrun ? "Would move":"Moving" ) ,": $src ====> $dst\n" if $verbosity > 1;
+    if(!$dryrun) {
+        rename($src, $dst) or die "Error in rename($src, $dst): $!\n";
+    }
+}
+
+#================================================================
+sub moveFailedJob($$$) {
+    (my $jobdir, my $dsttop, my $reason) = @_;
+
+    ++$jobStats{$reason};
+
+    my $subdir = dirname("$dsttop/$reason/$jobdir");
+    if(!-d $subdir and not $dryrun) {
+        File::Path::make_path($subdir); # don't die: parallel uploads create a race condition
+        # if make_path() failed because of a race, the directory must exist
+        -d $subdir or die "Error creating directory $subdir: $!\n";
+    }
+
+    my $dstname = $subdir .'/'. basename($jobdir);
+    my $done = 0;
+    my $numtries = 0;
+    do {
+        eval { maybe_rename($jobdir, $dstname); };
+        if($@) {
+            die $@ if(++$numtries > 99);
+            $dstname = $subdir .'/'. basename($jobdir) . '.fail' . sprintf('%02d', $numtries);
+        }
+        else {
+            $done = 1;
+        }
+    } until $done;
+}
+
+#================================================================
+# Grid jobs copy outputs into a temporary directory named like
+# 00826.0144a733.  Normally such dirs are renamed to keep just the
+# first part, "00826".  Sometimes the renaming fails, but otherwise
+# the job is good.  Strip the tmp suffux to detect in-cluster
+# duplicates.
+
+sub stripTmpSuffix($) {
+    my ($orig) = @_;
+
+    my $dir = dirname($orig);
+    my $base = basename($orig);
+
+    $base =~ s/\.[[:xdigit:]]+$//;
+
+    die "Unexpected job directory name: $base. Expect 5 decimal digits after stripping the tmp suffix.\n"
+        unless $base =~ /^\d{5}$/;
+
+    return "$dir/$base";
+}
+
+#================================================================
+# Move job dir to the dst area
+sub moveGoodJob($$) {
+    (my $jobdir, my $dsttop) = @_;
+    my $dstdir = stripTmpSuffix("$dsttop/good/$jobdir");
+    if(!$dryrun) {
+        my $gooddir = dirname($dstdir);
+        if(not -d $gooddir) {
+            File::Path::make_path($gooddir)
+                or die "Error creating directory $gooddir: $!\n";
+        }
+    }
+    maybe_rename($jobdir, $dstdir);
+}
+
+#================================================================
+sub isDuplicated($$) {
+    my ($jobdir, $dsttop) = @_;
+
+    my $dstname = stripTmpSuffix("$dsttop/good/$jobdir");
+
+    my $res = (-e $dstname) ? 1 : 0;
+    if($verbosity > 1) {
+        print "\tisDuplicated($jobdir) = $res\n";
+    }
+    return $res;
+}
+
+#================================================================
+sub processJobDir($) {
+    my ($jobdir) = @_;
+    print "Processing $jobdir\n" if $verbosity > 1;
+
+    my $failed = 1;
+    my @filesToUpload;
+
+  CHECK: # put all the checks into a fake loop
+    # then use loop control "last" to avoid mutiple nested "if"-s.
+    while(1) {
+
+        my $logFileName = getLogFileName($jobdir);
+        if(!$logFileName) {
+            print "\tNo unique log file for $jobdir\n" if $verbosity;
+            moveFailedJob($jobdir, $dsttop, NOLOG());
+            last CHECK;
+        }
+
+        # make sure the .log.json file is there.
+        # this is the only check we can do on that file, because it is not
+        # listed in the manifest
+        my $logJsonFileName = $logFileName . ".json";
+        if(not -s $logJsonFileName) {
+            print "\tNo valid .log.json file in $jobdir\n" if $verbosity;
+            moveFailedJob($jobdir, $dsttop, DATASIZE());
+            last CHECK;
+        }
+
+        my ($manifest_selfhash, $logfilehash, $workerFileSize, $workerFileDigest, $payload_started, $payload_ok)
+            = processLogFile($logFileName);
+
+        if(not defined $payload_ok) {
+            moveFailedJob($jobdir, $dsttop, LOGCHECK());
+            last CHECK;
+        }
+
+        if($payload_started and !$payload_ok) {
+            print "\tJob did not run correctly in $jobdir\n" if $verbosity;
+            moveFailedJob($jobdir, $dsttop, EXITSTAT());
+            last CHECK;
+        }
+
+        if($manifest_selfhash ne $logfilehash) {
+            print "\tLog file checksum mismatch for $jobdir\n" if $verbosity;
+            moveFailedJob($jobdir, $dsttop, LOGCHECK());
+            last CHECK;
+        }
+
+        # Look at the files listed in the manifest:
+        # Make sure each file is paired with its json
+        my $jsonpattern = '\.json$';
+        my @contentFiles = grep { ! /$jsonpattern/ } keys %$workerFileDigest;
+        my @metaFiles = grep {  /$jsonpattern/ } keys %$workerFileDigest;
+        if($#contentFiles != $#metaFiles) {
+            print "\tNumber of content and json files does not agree for $jobdir\n" if $verbosity;
+            moveFailedJob($jobdir, $dsttop, METAPAIRED());
+            last CHECK;
+        }
+        foreach my $f (@contentFiles) {
+            my $found = grep { m"$f.json" } @metaFiles;
+            if(!$found) {
+                print "\tNumber of content and json files does not agree for $jobdir\n" if $verbosity;
+                moveFailedJob($jobdir, $dsttop, METAPAIRED());
+                last CHECK;
+            }
+        }
+
+        # Verify integrity of files listed in the manifest:
+        foreach my $fn (keys %$workerFileDigest) {
+            my $st = stat($jobdir.'/'. $fn);
+
+            if(!$st or $st->size != $$workerFileSize{$fn}) {
+                print "\tError stat-ing file $jobdir/$fn\n" if $verbosity;
+                moveFailedJob($jobdir, $dsttop, DATASIZE());
+                last CHECK;
+            }
+
+            if($opt{'verify-data'}) {
+                if(!verifyDigest($jobdir.'/'.$fn, $$workerFileDigest{$fn})) {
+                    print "\tDigest mismatch for $jobdir/$fn\n" if $verbosity;
+                    moveFailedJob($jobdir, $dsttop, DATACHECK());
+                    last CHECK;
+                }
+            }
+        }
+
+        #----------------
+        # Detect duplicates.  Note: this is weak check.  The real one
+        # will be done during the file upload to its unique permanent
+        # location.  (Or during SAM registration.)
+
+        if(isDuplicated($jobdir, $dsttop)) {
+            print "\tDuplicated dir $jobdir\n" if $verbosity;
+            moveFailedJob($jobdir, $dsttop, DUPLICATE());
+            last CHECK;
+        }
+
+        #----------------
+        # All checks passed
+        $failed = 0;
+        ++$jobStats{GOOD()};
+        moveGoodJob($jobdir, $dsttop);
+        last CHECK;
+    }
+
+    print +($failed ? "FAILED" : "OK"), ":\t$jobdir\n" if $verbosity;
+}
+
+#================================================================
+sub isTooRecent($) {
+    my ($jobdir) = @_;
+
+    # FIXME: also check time stamps of all the files, not just the dir?
+    my $st = stat($jobdir) or die "Can't stat($jobdir): $!\n";
+    my $now = time();
+    # print "$jobdir mtime = ", $st->mtime, ", which is ", $now - $st->mtime,  " seconds ago\n";
+    return ($now - $st->mtime) < $timecut;
+}
+
+#================================================================
+sub processClusterDir($) {
+    my ($clusterdir) = @_;
+
+    my $CLD0;
+    opendir(CLD0, $clusterdir) or die "Can't opendir($clusterdir): $!\n";
+    while(my $sd1 = readdir(CLD0)) {
+        next if $sd1 =~ /^\./;
+        my $CLD1;
+        opendir(CLD1, "$clusterdir/$sd1") or die "Can't opendir($clusterdir/$sd1): $!\n";
+        while(my $sd2 = readdir(CLD1)) {
+            next if $sd2 =~ /^\./;
+
+            my $jobdir= "$clusterdir/$sd1/$sd2";
+
+            if(isTooRecent($jobdir)) {
+                print "Skipping $jobdir:  too recent\n"  if $verbosity > 1;
+                next;
+            }
+
+            processJobDir($jobdir);
+        }
+        closedir(CLD1);
+    }
+    closedir(CLD0);
+}
+
+#================================================================
+sub usage() {
+    my $self = basename($0);
+    return <<EOF
+Usage:
+        $self [options] --dsttop=/path/dir clusterdir1 clusterdir2 ....
+
+This can be run repeatedly on the same cluster as more jobs complete.
+The supported options are
+
+    --verify-data         Compute and check a SHA-256 digest of data files.
+                          This is off by default, because file integrity
+                          should be verified after file upload anyway.
+
+    --timecut=<int>       Skip outputs that were modified more recently than the
+                          given number of seconds - they may still be written by
+                          a grid process.  The default --timecut is $timecut seconds.
+
+    --dry-run             Analyze jobdirs, but do not move the files.
+
+    --verbosity=<int>     Verbosity level.  The default is 1.
+
+    --help                Print this message.
+
+The "faildir" directory should be on the same filesystem as the
+jobdirs, so that failed job outputs can be moved (not copied) into it.
+EOF
+;
+}
+
+#================================================================
+# Process command line opts.
+GetOptions(\%opt,
+           "dsttop=s",
+           "verify-data!",
+           "timecut=i",
+           "verbosity=i",
+           "dry-run",
+           "stdin",
+           "help",
+           )
+    or die "\nError processing command line options.\n";
+
+if($opt{'help'}) {
+    print usage();
+    exit 0;
+}
+
+die "The --dsttop parameter must be provided. Try the --help option.\n"
+    unless defined $dsttop;
+
+die "What job cluster(s) do you want to process? Try the --help option.\n" if ($#ARGV < 0);
+foreach my $dir (@ARGV) {
+    processClusterDir($dir);
+}
+
+print "Summary: ", join(', ', (map { " $errorCodes{$_}: $jobStats{$_}" } sort keys %jobStats )), "\n";
+
+exit 0;
+
+#================================================================
