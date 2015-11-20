@@ -1,0 +1,123 @@
+#!/usr/bin/perl -w
+#
+# Copies given files to their standard location.
+# Files that already exist at the destination are skipped.
+#
+# A.Gaponenko, 2015
+#
+
+use strict;
+use File::Basename;
+use File::Path qw(make_path);
+use File::stat;
+use File::Copy;
+use Getopt::Long;
+use Digest;
+
+use Mu2eFilename;
+
+my $verbosity=1;
+my $dryrun=0;
+my %opt = ( dataroot=>\$ENV{'MU2E_DATAROOT'}, verbosity=>\$verbosity, 'dry-run'=>\$dryrun, help=>0 );
+
+# stat counters for the processing
+my $numCopied = 0;
+my $numSkipped = 0;
+
+#================================================================
+sub processFile($) {
+    my ($infile) = @_;
+    my $fn = Mu2eFilename->parse(basename($infile));
+
+    my $stdpath = $fn->abspathname;
+
+    if(-e $stdpath) {
+        ++$numSkipped;
+        print "Skipped file $infile\n" if $verbosity > 1;
+    }
+    else {
+        my $st = stat($infile) or die "Error stating $infile: $!\n";
+        my $now_string = localtime();
+
+        print +($dryrun ? "Would start" : "Starting"),
+        " to transfer $infile to $stdpath (", $st->size, " bytes) on $now_string\n"
+            if $verbosity > 0;
+
+        if(!$dryrun) {
+            # FIXME: use high precision time to measure the data transfer rate.
+            # Need to install the Time::HiRes module: perl-Time-HiRes.x86_64 RPM.
+            my $t1 = time();
+
+            my $dirpath = dirname($stdpath);
+            make_path($dirpath);
+
+            -d $dirpath or die "Error creating dir path $dirpath: $!\n";
+
+            copy($infile, $stdpath) or die "Error copying $infile to $stdpath: $!\n";
+
+            my $t2 = time();
+
+            if(($verbosity > 0) && ($t2-$t1 > 10)) {
+                my $datarate = $st->size/1024./1024./($t2 - $t1);
+                print "\t$datarate MB/s\n";
+            }
+        }
+
+        ++$numCopied;
+    }
+}
+
+#================================================================
+sub usage() {
+    my $self = basename($0);
+    return <<EOF
+Usage:
+        $self [options]
+
+Will read file names on stdin and try to copy each file to its
+standard location.  Files that already exist at the destination will
+be skipped.  A report on the number of skipped and copied files is
+printed at the end.
+
+The supported options are
+
+    --dataroot=<path>     The root of the standard data tree
+
+    --verbosity=<int>     Verbosity level.  The default is 1.
+
+    --dry-run             Do not copy the files, just count and report.
+
+    --help                Print this message.
+
+EOF
+;
+}
+
+#================================================================
+# Process command line opts.
+GetOptions(\%opt,
+           "dataroot=s",
+           "verbosity=i",
+           "dry-run",
+           "help",
+           )
+    or die "\nError processing command line options.\n";
+
+if($opt{'help'}) {
+    print usage();
+    exit 0;
+}
+
+die "ERROR: Got non-option command line parameters.  Try the --help option.\n"
+    unless $#ARGV ==  -1;
+
+while(my $line = <STDIN>) {
+    chomp($line);
+    processFile($line);
+}
+
+print "Summary: skipped $numSkipped and copied $numCopied files\n";
+
+exit 0;
+
+#================================================================
