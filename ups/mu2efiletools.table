@@ -1,0 +1,10 @@
+FILE=Table
+Product=mu2efiletools
+
+Flavor=ANY
+Qualifiers=""
+
+Action=setup
+   ProdDir()
+   SetupEnv()
+   SetupRequired( mu2efilename )

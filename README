@@ -1,0 +1,5 @@
+This package provides scripts to check results of Mu2e production
+jobs, copy results to the standard location, verify file integrity,
+and register files in SAM.  Their functionality does not depend on
+jobsub_client, this is why these scripts are not in the mu2egrid
+package.
