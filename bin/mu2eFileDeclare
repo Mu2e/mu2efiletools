@@ -1,0 +1,106 @@
+#!/usr/bin/perl -w
+#
+# Declares Mu2e files to SAM, from JSON inputs.
+#
+# A.Gaponenko, 2015
+#
+
+use strict;
+use English '-no_match_vars';
+use Getopt::Long;
+use LWP::UserAgent;
+use File::Basename;
+use Data::Dumper;
+
+my $verbosity=1;
+my %opt = ( verbosity=>\$verbosity, help=>0 );
+
+#================================================================
+sub processFile($$) {
+    my ($ua, $jsname) = @_;
+    print "Processing file $jsname\n" if $verbosity > 1;
+    die "Error: expect .json files on input. Got: \"$jsname\""
+        unless $jsname =~ /\.json$/;
+
+    my $FH;
+    open(FH, "<", $jsname) or die "Can not open $jsname: $!\n";
+    my $jstext;
+    while(my $line = <FH>) {
+        $jstext .= $line;
+    }
+    close FH;
+
+    # Create a request
+    my $req = HTTP::Request->new(POST => 'https://samwebgpvm01.fnal.gov:8483/sam/mu2e/api/files');
+    $req->content_type('application/json');
+    $req->content($jstext);
+
+    # Pass request to the user agent and get a response back
+    my $res = $ua->request($req);
+
+    # Check the outcome of the response
+    if ($res->is_success) {
+        print "Successfully processed file $jsname\n" if $verbosity > 0;
+        print "Dump of the server response:\n" , Dumper($res), "\n" if $verbosity > 1;
+    }
+    else {
+        print STDERR "Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 0;
+        die "Stopping on error: ", $res->status_line, ". ", $res->content, "\n";
+    }
+
+}
+
+#================================================================
+sub usage() {
+    my $self = basename($0);
+    return <<EOF
+Usage:
+        $self [options]
+
+        Reads names of json files from STDIN, and uses their content to
+        declare Mu2e file to SAM.  The supported options are
+
+        --verbosity=<int>     Verbosity level.  The default is 1.
+
+        --help                Print this message.
+
+        Before using this script, run kx509 to generate authentication files
+        to connect to the server.  Or set environment variables
+        HTTPS_CERT_FILE and HTTPS_KEY_FILE to point to the appropriate files.
+
+EOF
+;
+}
+
+#================================================================
+# Process command line opts.
+GetOptions(\%opt,
+           "verbosity=i",
+           "help",
+    )
+    or die "\nError processing command line options.\n";
+
+if($opt{'help'}) {
+    print usage();
+    exit 0;
+}
+
+die "ERROR: Got non-option command line parameters.  Try the --help option.\n"
+    unless $#ARGV ==  -1;
+
+
+$ENV{HTTPS_CERT_FILE} = '/tmp/x509up_u'.$EUID unless defined $ENV{HTTPS_CERT_FILE};
+$ENV{HTTPS_KEY_FILE}  = '/tmp/x509up_u'.$EUID unless defined $ENV{HTTPS_KEY_FILE};
+
+my $ua = LWP::UserAgent->new;
+#$ua->agent("MyApp/0.1 ");
+
+while(my $line = <STDIN>) {
+    chomp($line);
+    processFile($ua, $line);
+
+}
+
+exit 0;
+
+#================================================================
