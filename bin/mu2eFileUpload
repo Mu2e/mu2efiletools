@@ -13,6 +13,7 @@ use File::stat;
 use File::Copy;
 use Getopt::Long;
 use Digest;
+use Time::HiRes qw(gettimeofday tv_interval);
 
 use Mu2eFilename;
 
@@ -23,6 +24,9 @@ my %opt = ( dataroot=>\$ENV{'MU2E_DATAROOT'}, verbosity=>\$verbosity, 'dry-run'=
 # stat counters for the processing
 my $numCopied = 0;
 my $numSkipped = 0;
+
+my $totalCopiedBytes = 0;
+my $totalCopyTime = 0;
 
 #================================================================
 sub processFile($) {
@@ -40,13 +44,12 @@ sub processFile($) {
         my $now_string = localtime();
 
         print +($dryrun ? "Would start" : "Starting"),
-        " to transfer $infile to $stdpath (", $st->size, " bytes) on $now_string\n"
+        " to transfer ", $st->size, " bytes in $infile to $stdpath on $now_string\n"
             if $verbosity > 0;
 
         if(!$dryrun) {
-            # FIXME: use high precision time to measure the data transfer rate.
-            # Need to install the Time::HiRes module: perl-Time-HiRes.x86_64 RPM.
-            my $t1 = time();
+            # Use high precision time to measure the data transfer rate.
+            my $t1 = [gettimeofday()];
 
             my $dirpath = dirname($stdpath);
             make_path($dirpath);
@@ -55,16 +58,27 @@ sub processFile($) {
 
             copy($infile, $stdpath) or die "Error copying $infile to $stdpath: $!\n";
 
-            my $t2 = time();
-
-            if(($verbosity > 0) && ($t2-$t1 > 10)) {
-                my $datarate = $st->size/1024./1024./($t2 - $t1);
-                print "\t$datarate MB/s\n";
+            my $elapsed = tv_interval($t1);
+            if(($verbosity > 0) && ($elapsed > 0.1)) {
+                my $datarate = $st->size/1024./1024./$elapsed;
+                print "\t$datarate MiB/s\n";
             }
+
+            $totalCopiedBytes += $st->size;
+            $totalCopyTime += $elapsed;
         }
 
         ++$numCopied;
     }
+}
+#================================================================
+sub pretty_print_bytes($) {
+    my ($size) = @_;
+    foreach ('B','KiB','MiB','GiB','TiB') {
+        return sprintf("%.2f",$size)." $_" if $size < 1024;
+        $size /= 1024;
+    }
+    return sprintf("%.2f",$size)."PiB";
 }
 
 #================================================================
@@ -116,7 +130,13 @@ while(my $line = <STDIN>) {
     processFile($line);
 }
 
-print "Summary: skipped $numSkipped and copied $numCopied files\n";
+print "Summary: skipped $numSkipped and copied $numCopied files.";
+if($totalCopyTime > 0.1) {
+    my $sz = pretty_print_bytes($totalCopiedBytes);
+    my $throughput = sprintf "%.2f MiB/s", $totalCopiedBytes/1024./1024./$totalCopyTime;
+    print "The average throughput was $sz in $totalCopyTime s = $throughput\n";
+}
+print "\n";
 
 exit 0;
 
