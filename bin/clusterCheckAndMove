@@ -308,7 +308,12 @@ sub processJobDir($) {
                 last CHECK;
             }
 
-            if($opt{'verify-data'}) {
+            # .art files are normally uploaded and checked after the upload
+            # so we don't do it here by default.  Json files are never
+            # uploaded (and are small).    Grid job checks is a good step
+            # to verify them.
+            if($opt{'verify-data'} or $fn =~ /\.json$/ or $fn =~ /\.log$/) {
+                print "verifying sha256 for $fn\n";
                 if(!verifyDigest($jobdir.'/'.$fn, $$workerFileDigest{$fn})) {
                     print "\tDigest mismatch for $jobdir/$fn\n" if $verbosity;
                     moveFailedJob($jobdir, $dsttop, DATACHECK());
