@@ -1,0 +1,201 @@
+#!/usr/bin/perl -w
+#
+# Verifies the checksum of a file.
+#
+# A.Gaponenko, 2015
+#
+
+use strict;
+
+use English '-no_match_vars';
+use Getopt::Long;
+use LWP::UserAgent;
+use HTTP::Request::Common;
+use JSON;
+use File::Basename;
+use Cwd 'abs_path';
+use Time::HiRes qw(gettimeofday tv_interval);
+use Digest;
+use Data::Dumper;
+
+my $add_location=1;
+my $force=0;
+my $verbosity=1;
+my %opt = ( 'add-sam-location'=>\$add_location, 'force'=>\$force, verbosity=>\$verbosity, help=>0 );
+
+# stat counters for the processing
+my $numChecked = 0;
+my $numSkipped = 0;
+my $numBad = 0;
+
+my $totalCopiedBytes = 0;
+my $totalCopyTime = 0;
+
+#================================================================
+sub isNotVerified($$) {
+    my ($ua, $pathname) = @_;
+
+    my $req = HTTP::Request->new(GET => 'https://samwebgpvm01.fnal.gov:8483/sam/mu2e/api/files/name/'.basename($pathname).'/locations?format=json');
+    my $res = $ua->request($req);
+    if ($res->is_success) {
+        my $jstext = $res->content;
+        my $js = from_json($jstext);
+        print "Got locations for $pathname: ",Dumper($js), "\n" if $verbosity > 3;
+        die "Error: expect a JSON array when querying file locations.  Got instead: '$jstext'\n"
+            unless ref $js eq 'ARRAY';
+        foreach my $entry (@$js) {
+            my $loc = ${$entry}{'location'};
+            my $dn = dirname($pathname);
+            return 0 if defined $loc and $loc =~ m|$dn|;
+        }
+    }
+    else {
+        print STDERR "Error querying file locations. Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 0;
+        die "Stopping on error: ", $res->status_line, ". ", $res->content, "\n";
+    }
+
+    return 1;
+}
+
+#================================================================
+sub makeSamLocation($) {
+    return dirname($_[0]);
+#tmp    my ($pathname) = @_;
+#tmp    my $dir = dirname($pathname);
+#tmp    return "enstore:".$dir if $dir =~ m|^/pnfs/mu2e/scratch|;
+#tmp    return "enstore:".$dir if $dir =~ m|^/pnfs/mu2e/persistent|;
+#tmp    return "mu2edata:".$dir if $dir =~ m|^/mu2e/data|;
+#tmp    die "Error: makeSamLocation('$pathname'): unknonw file location.\n";
+}
+
+#================================================================
+sub addLocationToSam($$) {
+    my ($ua, $pathname) = @_;
+
+    # Note: the documentation at
+    # https://cdcvs.fnal.gov/redmine/projects/sam-web/wiki/Interface_definitions
+    # specifies HTTP PUT for adding a location. However it seems we should use POST instead.
+    print +($add_location ? "Adding" : "Would add"). " to SAM location = $pathname\n" if $verbosity > 2;
+    if($add_location) {
+        my $res = $ua->request(
+            POST 'https://samwebgpvm01.fnal.gov:8483/sam/mu2e/api/files/name/'.basename($pathname).'/locations',
+            Content => {'add' => $pathname }
+            );
+
+        if ($res->is_success) {
+            print "Added location $pathname to SAM. Server response:\n", Dumper($res), "\n" if $verbosity > 3;
+        }
+        else {
+            print STDERR "Error adding file location $pathname. Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 0;
+            die "Stopping on error: ", $res->status_line, ". ", $res->content, "\n";
+        }
+    }
+
+}
+
+#================================================================
+sub processFile($$) {
+    my ($ua, $pathname) = @_;
+
+    if($force or isNotVerified($ua, $pathname)) {
+        my $now_string = localtime();
+        print "Starting $pathname on $now_string\n"
+            if $verbosity > 0;
+
+        # Get sha256 from file metadata
+        my $req = HTTP::Request->new(GET => 'https://samwebgpvm01.fnal.gov:8483/sam/mu2e/api/files/name/'.basename($pathname).'/metadata?format=json');
+        my $res = $ua->request($req);
+        if ($res->is_success) {
+            my $jstext = $res->content;
+            print "got json = $jstext\n" if $verbosity > 3;
+            my $js = from_json($jstext);
+
+            my $jssha = ${$js}{'dh.sha256'};
+            die "Error: no dh.sha256 record for file $pathname\n" unless defined $jssha;
+
+            # compute sha256 for the file
+            my $dig = Digest->new('SHA-256');
+            open(my $fh, '<', $pathname) or die "Error opening $pathname for reading: $!\n";
+            $dig->addfile($fh);
+            close $fh;
+            ++$numChecked;
+
+            if($dig->hexdigest eq $jssha) {
+                print "OK: $pathname\n" if $verbosity > 1;
+                addLocationToSam($ua, $pathname);
+            }
+            else {
+                print "Bad: $pathname\n" if $verbosity > 0;
+                ++$numBad;
+            }
+        }
+        else {
+            print STDERR "Error querying file metadata. Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 0;
+            die "Stopping on error: ", $res->status_line, ". ", $res->content, "\n";
+        }
+    }
+    else {
+        ++$numSkipped;
+        print "Already verified: $pathname\n" if $verbosity > 2;
+    }
+}
+
+#================================================================
+sub usage() {
+    my $self = basename($0);
+    return <<EOF
+Usage:
+        $self [options]
+
+Reads names of json files from STDIN, and verifies their sha256
+checksums agains SAM metadata.
+
+Options:
+
+    --[no]add-sam-location [Do not] add location of a successfully
+    verified file to the SAM database.
+
+    --force Verify all files, without skipping those that have their
+    locations already registered.
+
+    --verbosity=<int> Verbosity level.  The default is 1.
+
+    --help Print this message.
+
+Before using this script, run kx509 to generate authentication files
+to connect to the server.  Or set environment variables
+HTTPS_CERT_FILE and HTTPS_KEY_FILE to point to the appropriate files.
+
+EOF
+;
+}
+
+# Process command line opts.
+GetOptions(\%opt,
+           "add-sam-location!",
+           "force",
+           "verbosity=i",
+           "help",
+           )
+    or die "\nError processing command line options.\n";
+
+if($opt{'help'}) {
+    print usage();
+    exit 0;
+}
+
+$ENV{HTTPS_CERT_FILE} = '/tmp/x509up_u'.$EUID unless defined $ENV{HTTPS_CERT_FILE};
+$ENV{HTTPS_KEY_FILE}  = '/tmp/x509up_u'.$EUID unless defined $ENV{HTTPS_KEY_FILE};
+
+my $ua = LWP::UserAgent->new;
+
+while(my $line = <STDIN>) {
+    chomp($line);
+    processFile($ua, abs_path($line));
+}
+
+print "Summary: checked $numChecked files, found $numBad bad.  Skipped verification of $numSkipped files.\n";
+
+exit 0;
+
+#================================================================
