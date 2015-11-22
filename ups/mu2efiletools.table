@@ -7,4 +7,5 @@ Qualifiers=""
 Action=setup
    ProdDir()
    SetupEnv()
-   SetupRequired( mu2efilename )
+   SetupRequired( mu2efilename v0_2 )
+   pathPrepend(PATH, ${UPS_PROD_DIR}/bin)
