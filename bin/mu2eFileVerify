@@ -13,6 +13,7 @@ use LWP::UserAgent;
 use HTTP::Request::Common;
 use JSON;
 use File::Basename;
+use File::stat;
 use Cwd 'abs_path';
 use Time::HiRes qw(gettimeofday tv_interval);
 use Digest;
@@ -28,15 +29,22 @@ my $numChecked = 0;
 my $numSkipped = 0;
 my $numBad = 0;
 
-my $totalCopiedBytes = 0;
-my $totalCopyTime = 0;
+my $totalReadBytes = 0;
+my $totalSHATime = 0;
+
+my $totalMetadataQueryTime = 0.;
+my $totalLocationQueryTime = 0.;
+my $totalLocationUpdateTime = 0.;
 
 #================================================================
 sub isNotVerified($$) {
     my ($ua, $pathname) = @_;
 
+    my $t1 = [gettimeofday()];
     my $req = HTTP::Request->new(GET => 'https://samwebgpvm01.fnal.gov:8483/sam/mu2e/api/files/name/'.basename($pathname).'/locations?format=json');
     my $res = $ua->request($req);
+    $totalLocationQueryTime += tv_interval($t1);
+
     if ($res->is_success) {
         my $jstext = $res->content;
         my $js = from_json($jstext);
@@ -77,10 +85,15 @@ sub addLocationToSam($$) {
     # specifies HTTP PUT for adding a location. However it seems we should use POST instead.
     print +($add_location ? "Adding" : "Would add"). " to SAM location = $pathname\n" if $verbosity > 2;
     if($add_location) {
+
+        my $t1 = [gettimeofday()];
+
         my $res = $ua->request(
             POST 'https://samwebgpvm01.fnal.gov:8483/sam/mu2e/api/files/name/'.basename($pathname).'/locations',
             Content => {'add' => $pathname }
             );
+
+        $totalLocationUpdateTime += tv_interval($t1);
 
         if ($res->is_success) {
             print "Added location $pathname to SAM. Server response:\n", Dumper($res), "\n" if $verbosity > 3;
@@ -102,9 +115,14 @@ sub processFile($$) {
         print "Starting $pathname on $now_string\n"
             if $verbosity > 0;
 
+        my $t1 = [gettimeofday()];
+
         # Get sha256 from file metadata
         my $req = HTTP::Request->new(GET => 'https://samwebgpvm01.fnal.gov:8483/sam/mu2e/api/files/name/'.basename($pathname).'/metadata?format=json');
         my $res = $ua->request($req);
+
+        $totalMetadataQueryTime += tv_interval($t1);
+
         if ($res->is_success) {
             my $jstext = $res->content;
             print "got json = $jstext\n" if $verbosity > 3;
@@ -113,11 +131,20 @@ sub processFile($$) {
             my $jssha = ${$js}{'dh.sha256'};
             die "Error: no dh.sha256 record for file $pathname\n" unless defined $jssha;
 
+
+            my $t1hash = [gettimeofday()];
+
             # compute sha256 for the file
             my $dig = Digest->new('SHA-256');
             open(my $fh, '<', $pathname) or die "Error opening $pathname for reading: $!\n";
             $dig->addfile($fh);
             close $fh;
+
+            $totalSHATime += tv_interval($t1);
+
+            my $st = stat($pathname) or die "Error stating $pathname: $!\n";
+            $totalReadBytes += $st->size;
+
             ++$numChecked;
 
             if($dig->hexdigest eq $jssha) {
@@ -193,6 +220,10 @@ while(my $line = <STDIN>) {
     chomp($line);
     processFile($ua, abs_path($line));
 }
+
+printf "Computed SHA-256 on %.3f GB in %.2f s\n", $totalReadBytes/1024/1024/1024,  $totalSHATime;
+printf "SAMWeb times: query metadata = %.2f s,  query location = %.2f s, update location = %.2f s\n",
+    $totalMetadataQueryTime, $totalLocationQueryTime, $totalLocationUpdateTime;
 
 print "Summary: checked $numChecked files, found $numBad bad.  Skipped verification of $numSkipped files.\n";
 
