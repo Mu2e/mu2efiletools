@@ -13,7 +13,8 @@ use File::Basename;
 use Data::Dumper;
 
 my $verbosity=1;
-my %opt = ( verbosity=>\$verbosity, help=>0 );
+my $delete_json = 1;
+my %opt = ( verbosity=>\$verbosity, 'delete-json'=>\$delete_json, help=>0 );
 
 #================================================================
 sub processFile($$) {
@@ -40,8 +41,12 @@ sub processFile($$) {
 
     # Check the outcome of the response
     if ($res->is_success) {
-        print "Successfully processed file $jsname\n" if $verbosity > 0;
         print "Dump of the server response:\n" , Dumper($res), "\n" if $verbosity > 1;
+        if($delete_json) {
+            unlink $jsname or die "Error deleting file $jsname: $!\n";
+            print "Deleted $jsname\n" if $verbosity > 1;
+        }
+        print "Successfully processed file $jsname\n" if $verbosity > 0;
     }
     else {
         print STDERR "Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 0;
@@ -58,7 +63,10 @@ Usage:
         $self [options]
 
         Reads names of json files from STDIN, and uses their content to
-        declare Mu2e file to SAM.  The supported options are
+        declare Mu2e file to SAM.  If a file was declared successfully,
+        the json input file is deleted. The supported options are
+
+        --nodelete-json       Do not delete json files.
 
         --verbosity=<int>     Verbosity level.  The default is 1.
 
