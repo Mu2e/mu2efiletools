@@ -14,61 +14,102 @@ use File::Copy;
 use Getopt::Long;
 use Digest;
 use Time::HiRes qw(gettimeofday tv_interval);
+use Cwd 'abs_path';
 
 use Mu2eFilename;
 
+use constant TAPE => 'tape';
+use constant DISK => 'disk';
+use constant SCRATCH => 'scratch';
+
+my $dstarea; # tape, disk, or scratch
+my $forcecopy = 0;
 my $verbosity=1;
 my $dryrun=0;
-my %opt = ( dataroot=>\$ENV{'MU2E_DATAROOT'}, verbosity=>\$verbosity, 'dry-run'=>\$dryrun, help=>0 );
+my %opt = ( copy=>\$forcecopy, verbosity=>\$verbosity, 'dry-run'=>\$dryrun, help=>0 );
 
 # stat counters for the processing
 my $numCopied = 0;
+my $numMoved = 0;
 my $numSkipped = 0;
 
 my $totalCopiedBytes = 0;
 my $totalCopyTime = 0;
 
 #================================================================
+sub needToCopy($) {
+    my ($infile) = @_;
+    return 1 if $forcecopy;
+    return 1 if $dstarea eq TAPE();
+
+    my $absin = abs_path($infile);
+    return 0 if $dstarea eq DISK() and $absin =~ m|^/pnfs/mu2e/persistent|;
+    return 0 if $dstarea eq SCRATCH() and $absin =~ m|^/pnfs/mu2e/scratch|;
+
+    return 1;
+}
+
+#================================================================
 sub processFile($) {
     my ($infile) = @_;
     my $fn = Mu2eFilename->parse(basename($infile));
 
-    my $stdpath = $fn->abspathname;
+    my $stdpath;
+    $stdpath = $fn->abspathname_tape if($dstarea eq TAPE());
+    $stdpath = $fn->abspathname_disk if($dstarea eq DISK());
+    $stdpath = $fn->abspathname_scratch if($dstarea eq SCRATCH());
+    die "Internal error: unknown dstarea\n" unless defined $stdpath;
 
     if(-e $stdpath) {
         ++$numSkipped;
         print "Skipped file $infile\n" if $verbosity > 1;
     }
     else {
-        my $st = stat($infile) or die "Error stating $infile: $!\n";
+
+        my $dirpath = dirname($stdpath);
+        if(!$dryrun) {
+            make_path($dirpath);
+            -d $dirpath or die "Error creating dir path $dirpath: $!\n";
+        }
         my $now_string = localtime();
 
-        print +($dryrun ? "Would start" : "Starting"),
-        " to transfer ", $st->size, " bytes in $infile to $stdpath on $now_string\n"
-            if $verbosity > 0;
+        my $copy = needToCopy($infile);
+        if($copy)  {
+            my $st = stat($infile) or die "Error stating $infile: $!\n";
 
-        if(!$dryrun) {
-            # Use high precision time to measure the data transfer rate.
-            my $t1 = [gettimeofday()];
+            print +($dryrun ? "Would start" : "Starting"),
+            " to transfer ", $st->size, " bytes in $infile to $stdpath on $now_string\n"
+                if $verbosity > 0;
 
-            my $dirpath = dirname($stdpath);
-            make_path($dirpath);
+            if(!$dryrun) {
 
-            -d $dirpath or die "Error creating dir path $dirpath: $!\n";
+                # Use high precision time to measure the data transfer rate.
+                my $t1 = [gettimeofday()];
 
-            copy($infile, $stdpath) or die "Error copying $infile to $stdpath: $!\n";
+                copy($infile, $stdpath) or die "Error copying $infile to $stdpath: $!\n";
 
-            my $elapsed = tv_interval($t1);
-            if(($verbosity > 0) && ($elapsed > 0.1)) {
-                my $datarate = $st->size/1024./1024./$elapsed;
-                print "\t$datarate MiB/s\n";
+                my $elapsed = tv_interval($t1);
+
+                if(($verbosity > 0) && ($elapsed > 0.1)) {
+                    my $datarate = $st->size/1024./1024./$elapsed;
+                    print "\t$datarate MiB/s\n";
+                }
+
+                $totalCopiedBytes += $st->size;
+                $totalCopyTime += $elapsed;
             }
 
-            $totalCopiedBytes += $st->size;
-            $totalCopyTime += $elapsed;
+            ++$numCopied;
         }
+        else {
+            print +($dryrun ? "Would move" : "Moving"), " $infile to $stdpath on $now_string\n"
+                if $verbosity > 0;
 
-        ++$numCopied;
+            if(!$dryrun) {
+                rename($infile, $stdpath) or die "Error in rename($infile, $stdpath): $!\n";
+            }
+            ++$numMoved;
+        }
     }
 }
 #================================================================
@@ -86,16 +127,21 @@ sub usage() {
     my $self = basename($0);
     return <<EOF
 Usage:
-        $self [options]
+        $self {--tape|--disk|--scratch} [options]
 
 Will read file names on stdin and try to copy each file to its
-standard location.  Files that already exist at the destination will
-be skipped.  A report on the number of skipped and copied files is
+standard location.  One of the --tape, --disk, or --scratch choices
+must be made.  Files that already exist at the destination will be
+skipped.  A report on the number of skipped and copied files is
 printed at the end.
 
 The supported options are
 
-    --dataroot=<path>     The root of the standard data tree
+    --copy                Always copy the files and leave originals in place.
+                          By default the script will move files to the destination
+                          if possible. (E.g. files already in /pnfs/mu2e/scratch
+                          can be moved to the --scratch destination area.)
+                          For the --tape destination the files are always copied.
 
     --verbosity=<int>     Verbosity level.  The default is 1.
 
@@ -110,7 +156,10 @@ EOF
 #================================================================
 # Process command line opts.
 GetOptions(\%opt,
-           "dataroot=s",
+           "tape",
+           "disk",
+           "scratch",
+           "copy",
            "verbosity=i",
            "dry-run",
            "help",
@@ -125,12 +174,29 @@ if($opt{'help'}) {
 die "ERROR: Got non-option command line parameters.  Try the --help option.\n"
     unless $#ARGV ==  -1;
 
+
+if(defined $opt{'tape'}) {
+    die "Error: conflicting options --tape and --$dstarea\n" if defined $dstarea;
+    $dstarea = TAPE();
+}
+if(defined $opt{'disk'}) {
+    die "Error: conflicting options --disk and --$dstarea\n" if defined $dstarea;
+    $dstarea = DISK();
+}
+if(defined $opt{'scratch'}) {
+    die "Error: conflicting options --scratch and --$dstarea\n" if defined $dstarea;
+    $dstarea = SCRATCH();
+}
+die "Error: one of --tape, --disk, or --scratch must be requested\n" unless defined $dstarea;
+
+my $tScriptStart = [gettimeofday()];
 while(my $line = <STDIN>) {
     chomp($line);
     processFile($line);
 }
+my $totalElapsed = tv_interval($tScriptStart);
 
-print "Summary: skipped $numSkipped and copied $numCopied files.";
+print "Summary: copied $numCopied and moved $numMoved files in $totalElapsed seconds. Skipped $numSkipped files.\n";
 if($totalCopyTime > 0.1) {
     my $sz = pretty_print_bytes($totalCopiedBytes);
     my $throughput = sprintf "%.2f MiB/s", $totalCopiedBytes/1024./1024./$totalCopyTime;
