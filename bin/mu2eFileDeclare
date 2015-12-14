@@ -17,10 +17,16 @@ use File::Basename;
 use Data::Dumper;
 
 my $delete_json = 1;
+my $sam_web_server = 'https://samwebgpvm01.fnal.gov:8483';
 my $maxtries = 3;
 my $delay = 60;
 my $verbosity=1;
-my %opt = ('delete-json'=>\$delete_json,  maxtries=> \$maxtries, delay=>\$delay, verbosity=>\$verbosity, help=>0 );
+my %opt = ('delete-json'=>\$delete_json,
+           server=>\$sam_web_server,
+           maxtries=> \$maxtries,
+           delay=>\$delay,
+           verbosity=>\$verbosity,
+           help=>0 );
 
 #================================================================
 sub processFile($$) {
@@ -38,10 +44,9 @@ sub processFile($$) {
     close FH;
 
     # Create a request
-    my $req = HTTP::Request->new(POST => 'https://samwebgpvm01.fnal.gov:8483/sam/mu2e/api/files');
+    my $req = HTTP::Request->new(POST => $sam_web_server . '/sam/mu2e/api/files');
     $req->content_type('application/json');
     $req->content($jstext);
-
 
     my $numtries = 0;
     my $done = 0;
@@ -93,6 +98,9 @@ the json input file is deleted. The supported options are
 
         --nodelete-json       Do not delete json files.
 
+        --server=<string>     Samweb server to contact. The default is
+                              $sam_web_server
+
         --maxtries=<int>      Give up after the given number of failures
                               to post a request to the server. The default
                               is $maxtries.
@@ -116,6 +124,8 @@ EOF
 #================================================================
 # Process command line opts.
 GetOptions(\%opt,
+           "delete-json!",
+           "server",
            "maxtries=i",
            "delay=i",
            "verbosity=i",
