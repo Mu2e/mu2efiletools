@@ -5,8 +5,6 @@
 # A.Gaponenko, 2015
 #
 
-# FIXME: print a summary at the end
-# FIXME: measure and report timing
 # FIXME: enable persistent connections: my $ua = LWP::UserAgent->new(keep_alive => 0);
 
 use strict;
@@ -14,6 +12,7 @@ use English '-no_match_vars';
 use Getopt::Long;
 use LWP::UserAgent;
 use File::Basename;
+use Time::HiRes qw(gettimeofday tv_interval);
 use Data::Dumper;
 
 my $delete_json = 1;
@@ -27,6 +26,9 @@ my %opt = ('delete-json'=>\$delete_json,
            delay=>\$delay,
            verbosity=>\$verbosity,
            help=>0 );
+
+my $totalFiles= 0;
+my $totalServerTime = 0;
 
 #================================================================
 sub processFile($$) {
@@ -54,8 +56,15 @@ sub processFile($$) {
 
         ++$numtries;
 
+        # Measure the timing
+        my $t1 = [gettimeofday()];
+
         # Pass request to the user agent and get a response back
         my $res = $ua->request($req);
+
+        my $elapsed = tv_interval($t1);
+        $totalServerTime += $elapsed;
+
         my $now_string = localtime();
 
         # Check the outcome of the response
@@ -67,6 +76,7 @@ sub processFile($$) {
             }
             print "Successfully processed file $jsname on $now_string\n" if $verbosity > 0;
             $done = 1;
+            ++$totalFiles;
         }
         else {
             print STDERR "Got ",$res->status_line," on $now_string\n" if $verbosity > 0;
@@ -152,6 +162,8 @@ while(my $line = <STDIN>) {
     processFile($ua, $line);
 
 }
+
+print "Summary: processed $totalFiles files. Total time spent in communicating with the samweb server is $totalServerTime seconds.\n";
 
 exit 0;
 
