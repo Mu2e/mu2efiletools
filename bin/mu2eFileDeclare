@@ -5,8 +5,6 @@
 # A.Gaponenko, 2015
 #
 
-# FIXME: enable persistent connections: my $ua = LWP::UserAgent->new(keep_alive => 0);
-
 use strict;
 use English '-no_match_vars';
 use Getopt::Long;
@@ -154,7 +152,7 @@ die "ERROR: Got non-option command line parameters.  Try the --help option.\n"
 $ENV{HTTPS_CERT_FILE} = '/tmp/x509up_u'.$EUID unless defined $ENV{HTTPS_CERT_FILE};
 $ENV{HTTPS_KEY_FILE}  = '/tmp/x509up_u'.$EUID unless defined $ENV{HTTPS_KEY_FILE};
 
-my $ua = LWP::UserAgent->new;
+my $ua = LWP::UserAgent->new(keep_alive=>1);
 #$ua->agent("MyApp/0.1 ");
 
 while(my $line = <STDIN>) {
