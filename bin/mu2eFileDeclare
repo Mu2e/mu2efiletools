@@ -5,6 +5,10 @@
 # A.Gaponenko, 2015
 #
 
+# FIXME: print a summary at the end
+# FIXME: measure and report timing
+# FIXME: enable persistent connections: my $ua = LWP::UserAgent->new(keep_alive => 0);
+
 use strict;
 use English '-no_match_vars';
 use Getopt::Long;
@@ -12,9 +16,11 @@ use LWP::UserAgent;
 use File::Basename;
 use Data::Dumper;
 
-my $verbosity=1;
 my $delete_json = 1;
-my %opt = ( verbosity=>\$verbosity, 'delete-json'=>\$delete_json, help=>0 );
+my $maxtries = 3;
+my $delay = 60;
+my $verbosity=1;
+my %opt = ('delete-json'=>\$delete_json,  maxtries=> \$maxtries, delay=>\$delay, verbosity=>\$verbosity, help=>0 );
 
 #================================================================
 sub processFile($$) {
@@ -36,21 +42,40 @@ sub processFile($$) {
     $req->content_type('application/json');
     $req->content($jstext);
 
-    # Pass request to the user agent and get a response back
-    my $res = $ua->request($req);
 
-    # Check the outcome of the response
-    if ($res->is_success) {
-        print "Dump of the server response:\n" , Dumper($res), "\n" if $verbosity > 1;
-        if($delete_json) {
-            unlink $jsname or die "Error deleting file $jsname: $!\n";
-            print "Deleted $jsname\n" if $verbosity > 1;
+    my $numtries = 0;
+    my $done = 0;
+    while(not $done) {
+
+        ++$numtries;
+
+        # Pass request to the user agent and get a response back
+        my $res = $ua->request($req);
+        my $now_string = localtime();
+
+        # Check the outcome of the response
+        if ($res->is_success) {
+            print "Dump of the server response:\n" , Dumper($res), "\n" if $verbosity > 1;
+            if($delete_json) {
+                unlink $jsname or die "Error deleting file $jsname: $!\n";
+                print "Deleted $jsname\n" if $verbosity > 1;
+            }
+            print "Successfully processed file $jsname on $now_string\n" if $verbosity > 0;
+            $done = 1;
         }
-        print "Successfully processed file $jsname\n" if $verbosity > 0;
-    }
-    else {
-        print STDERR "Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 0;
-        die "Stopping on error: ", $res->status_line, ". ", $res->content, "\n";
+        else {
+            print STDERR "Got ",$res->status_line," on $now_string\n" if $verbosity > 0;
+            print STDERR "Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 1;
+            if($numtries >= $maxtries) {
+                die "Error: $maxtries tries failed. Stopping on $now_string due to: ",
+                $res->status_line, ".\n", $res->content,"\n";
+            }
+            else {
+                print STDERR "Will retry in $delay seconds\n" if $verbosity > 0;
+                sleep $delay;
+                $delay += int(rand($delay));
+            }
+        }
     }
 
 }
@@ -62,19 +87,27 @@ sub usage() {
 Usage:
         $self [options]
 
-        Reads names of json files from STDIN, and uses their content to
-        declare Mu2e file to SAM.  If a file was declared successfully,
-        the json input file is deleted. The supported options are
+Reads names of json files from STDIN, and uses their content to
+declare Mu2e file to SAM.  If a file was declared successfully,
+the json input file is deleted. The supported options are
 
         --nodelete-json       Do not delete json files.
+
+        --maxtries=<int>      Give up after the given number of failures
+                              to post a request to the server. The default
+                              is $maxtries.
+
+        --delay=<int>         Delay, in seconds, before retry on the first failure.
+                              The default is $delay seconds.
+                              The subsequent delays are randomly increased.
 
         --verbosity=<int>     Verbosity level.  The default is 1.
 
         --help                Print this message.
 
-        Before using this script, run kx509 to generate authentication files
-        to connect to the server.  Or set environment variables
-        HTTPS_CERT_FILE and HTTPS_KEY_FILE to point to the appropriate files.
+Before using this script, run kx509 to generate authentication files
+to connect to the server.  Or set environment variables
+HTTPS_CERT_FILE and HTTPS_KEY_FILE to point to the appropriate files.
 
 EOF
 ;
@@ -83,6 +116,8 @@ EOF
 #================================================================
 # Process command line opts.
 GetOptions(\%opt,
+           "maxtries=i",
+           "delay=i",
            "verbosity=i",
            "help",
     )
@@ -95,7 +130,6 @@ if($opt{'help'}) {
 
 die "ERROR: Got non-option command line parameters.  Try the --help option.\n"
     unless $#ARGV ==  -1;
-
 
 $ENV{HTTPS_CERT_FILE} = '/tmp/x509up_u'.$EUID unless defined $ENV{HTTPS_CERT_FILE};
 $ENV{HTTPS_KEY_FILE}  = '/tmp/x509up_u'.$EUID unless defined $ENV{HTTPS_KEY_FILE};
