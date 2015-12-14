@@ -10,18 +10,19 @@
 #
 
 use strict;
+use English '-no_match_vars';
 use File::Basename;
 use File::Path;
 use File::stat;
+use Cwd 'abs_path';
 use Getopt::Long;
 use Digest;
 use Data::Dumper;
 
-my $dsttop;
 my $timecut = 2*3600; # in seconds
 my $verbosity=1;
 my $dryrun=0;
-my %opt = ( dsttop=>\$dsttop, 'verify-data'=>0, 'timecut'=>\$timecut, verbosity=>\$verbosity, 'dry-run'=>\$dryrun, help=>0 );
+my %opt = ('verify-data'=>0, 'timecut'=>\$timecut, verbosity=>\$verbosity, 'dry-run'=>\$dryrun, help=>0 );
 
 # constant strings used as keys in the jobStats hash
 use constant GOOD => '0good'; # make it sort first in the summary output.  That string is not exposed.
@@ -46,6 +47,50 @@ my %errorCodes = (
     DATACHECK() => 'corrupted data file',
     DUPLICATE() => 'duplicate',
     );
+
+#================================================================
+sub dsttop($) {
+    my ($indir) = @_;
+    my $jobdir = abs_path($indir);
+
+    my $res = $opt{'dsttop'};
+
+    if(not defined $res) {
+
+        my $username = getpwuid($EUID);
+        die "Error: can not determine effective username.  You can try the --dsttop option to work around this check.\n"
+            unless defined $username;
+
+        if( $jobdir =~ m'^/pnfs/mu2e/persistent/outstage' ) {
+            $res = "/pnfs/mu2e/persistent/checked/$username";
+        }
+        elsif( $jobdir =~ m'^/pnfs/mu2e/scratch/outstage' )  {
+            $res = "/pnfs/mu2e/scratch/checked/$username";
+        }
+        elsif( $jobdir =~ m'^/mu2e/data/outstage' )  {
+            $res = "/mu2e/data/checked/$username";
+        }
+        else {
+            die "No heuristic to determine --dsttop for $jobdir  Please use the --dsttop command like option.\n";
+        }
+    }
+
+    return $res;
+}
+
+
+#================================================================
+# extract the "cluster/spreader/process" part from a potentially
+# longer jobname string
+sub reljobdir($) {
+    my ($indir) = @_;
+
+    die "Error: reljobdir() expects at least two '/' symbols on input.  Got: '$indir'\n"
+        unless $indir =~ m|([^/]+/[^/]+/[^/]+)$|;
+    my $res = $1;
+
+    return $res;
+}
 
 #================================================================
 sub getLogFileName($) {
@@ -159,7 +204,7 @@ sub moveFailedJob($$$) {
 
     ++$jobStats{$reason};
 
-    my $subdir = dirname("$dsttop/$reason/$jobdir");
+    my $subdir = dirname("$dsttop/$reason/" . reljobdir($jobdir));
     if(!-d $subdir and not $dryrun) {
         File::Path::make_path($subdir); # don't die: parallel uploads create a race condition
         # if make_path() failed because of a race, the directory must exist
@@ -206,7 +251,7 @@ sub stripTmpSuffix($) {
 # Move job dir to the dst area
 sub moveGoodJob($$) {
     (my $jobdir, my $dsttop) = @_;
-    my $dstdir = stripTmpSuffix("$dsttop/good/$jobdir");
+    my $dstdir = stripTmpSuffix("$dsttop/good/" . reljobdir($jobdir));
     if(!$dryrun) {
         my $gooddir = dirname($dstdir);
         if(not -d $gooddir) {
@@ -221,7 +266,7 @@ sub moveGoodJob($$) {
 sub isDuplicated($$) {
     my ($jobdir, $dsttop) = @_;
 
-    my $dstname = stripTmpSuffix("$dsttop/good/$jobdir");
+    my $dstname = stripTmpSuffix("$dsttop/good/" . reljobdir($jobdir));
 
     my $res = (-e $dstname) ? 1 : 0;
     if($verbosity > 1) {
@@ -234,6 +279,8 @@ sub isDuplicated($$) {
 sub processJobDir($) {
     my ($jobdir) = @_;
     print "Processing $jobdir\n" if $verbosity > 1;
+
+    my $dsttop = dsttop($jobdir);
 
     my $failed = 1;
     my @filesToUpload;
@@ -356,7 +403,8 @@ sub isTooRecent($) {
 
 #================================================================
 sub processClusterDir($) {
-    my ($clusterdir) = @_;
+    my ($in) = @_;
+    my $clusterdir = abs_path($in);
 
     my $CLD0;
     opendir(CLD0, $clusterdir) or die "Can't opendir($clusterdir): $!\n";
@@ -386,18 +434,31 @@ sub usage() {
     my $self = basename($0);
     return <<EOF
 Usage:
-        $self [options] --dsttop=/path/dir clusterdir1 clusterdir2 ....
+        $self [options] clusterdir1 [clusterdir2 ....]
 
-This can be run repeatedly on the same cluster as more jobs complete.
+This will check outputs of the given grid clusters in an outstage
+area, and move individual job directories into a "good" subdirectory,
+or one of subdirectories for failed jobs inside a destination area.
+See the --dsttop option below.  The command can be run repeatedly on
+the same cluster as more jobs complete.
+
 The supported options are
 
     --verify-data         Compute and check a SHA-256 digest of data files.
                           This is off by default, because file integrity
                           should be verified after file upload anyway.
+                          Json and log file checksums are always verified.
 
     --timecut=<int>       Skip outputs that were modified more recently than the
                           given number of seconds - they may still be written by
                           a grid process.  The default --timecut is $timecut seconds.
+
+    --dsttop=<direcory>   Use the specified directory as the destination area.
+                          If this option is not specified, files from subdirectories of
+                          /pnfs/mu2e/persistent/outstage will be moved to
+                          /pnfs/mu2e/persistent/checked/<username>
+                          (where <username> is the user running this script)
+                          and similar for pnfs scratch and /mu2e/data.
 
     --dry-run             Analyze jobdirs, but do not move the files.
 
@@ -428,9 +489,6 @@ if($opt{'help'}) {
     print usage();
     exit 0;
 }
-
-die "The --dsttop parameter must be provided. Try the --help option.\n"
-    unless defined $dsttop;
 
 die "What job cluster(s) do you want to process? Try the --help option.\n" if ($#ARGV < 0);
 foreach my $dir (@ARGV) {
