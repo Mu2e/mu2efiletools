@@ -25,7 +25,15 @@ my $add_location;
 my $redo=0;
 my $verbosity=3;
 
-my %opt = ( 'add-sam-location'=>\$add_location, 'redo'=>\$redo, verbosity=>\$verbosity, help=>0 );
+my $samweb_write_server = 'https://samweb.fnal.gov:8483';
+my $samweb_read_server = 'http://samweb.fnal.gov:8480';
+
+my %opt = ( 'add-sam-location'=>\$add_location,
+            'redo'=>\$redo,
+            'read-server' =>\$samweb_read_server,
+            'write-server' =>\$samweb_write_server,
+            verbosity=>\$verbosity,
+            help=>0 );
 
 # stat counters for the processing
 my $numTotalFiles = 0;
@@ -49,7 +57,7 @@ sub getSamSha($$) {
     my $fn = basename($pathname);
 
     # Get sha256 from file metadata
-    my $req = HTTP::Request->new(GET => 'https://samwebgpvm01.fnal.gov:8483/sam/mu2e/api/files/name/'.basename($pathname).'/metadata?format=json');
+    my $req = HTTP::Request->new(GET => $samweb_read_server.'/sam/mu2e/api/files/name/'.basename($pathname).'/metadata?format=json');
 
     my $t1 = [gettimeofday()];
     my $res = $ua->request($req);
@@ -81,7 +89,7 @@ sub isNotVerified($$) {
     my ($ua, $pathname) = @_;
 
     my $t1 = [gettimeofday()];
-    my $req = HTTP::Request->new(GET => 'https://samwebgpvm01.fnal.gov:8483/sam/mu2e/api/files/name/'.basename($pathname).'/locations?format=json');
+    my $req = HTTP::Request->new(GET => $samweb_read_server.'/sam/mu2e/api/files/name/'.basename($pathname).'/locations?format=json');
     my $res = $ua->request($req);
     $totalLocationQueryTime += tv_interval($t1);
 
@@ -190,7 +198,7 @@ sub maybeAddLocationToSam($$$) {
         my $t1 = [gettimeofday()];
 
         my $res = $ua->request(
-            POST 'https://samwebgpvm01.fnal.gov:8483/sam/mu2e/api/files/name/'.basename($pathname).'/locations',
+            POST $samweb_write_server.'/sam/mu2e/api/files/name/'.basename($pathname).'/locations',
             Content => {'add' => $location }
             );
 
@@ -300,6 +308,12 @@ Options:
     --redo                  Process all files, without skipping those
                             that have their locations already registered.
 
+    --read-server           Samweb server for querying. The default is
+                            $samweb_read_server
+
+    --write-server          Samweb server to write file locations. The default is
+                            $samweb_write_server
+
     --verbosity=<int>       Verbosity level. The default is $verbosity.
                             1 print a line per file that failed verification
                             2 printouts for OK and failed, but not skipped files
@@ -323,6 +337,8 @@ EOF
 GetOptions(\%opt,
            "add-sam-location!",
            "redo",
+           "read-server=s",
+           "write-server=s",
            "verbosity=i",
            "help",
            )
