@@ -19,15 +19,22 @@ use Time::HiRes qw(gettimeofday tv_interval);
 use Digest;
 use Data::Dumper;
 
-my $add_location=1;
-my $force=0;
-my $verbosity=1;
-my %opt = ( 'add-sam-location'=>\$add_location, 'force'=>\$force, verbosity=>\$verbosity, help=>0 );
+use Class::Struct Mu2eEnstoreInfo => [volume=>'$', location_cookie=>'$'];
+
+my $add_location;
+my $redo=0;
+my $verbosity=3;
+
+my %opt = ( 'add-sam-location'=>\$add_location, 'redo'=>\$redo, verbosity=>\$verbosity, help=>0 );
 
 # stat counters for the processing
-my $numChecked = 0;
+my $numTotalFiles = 0;
+my $numNoSam = 0;
 my $numSkipped = 0;
+my $numGood = 0;
+my $numNoTape = 0;
 my $numBad = 0;
+my $numAddedLocation = 0;
 
 my $totalReadBytes = 0;
 my $totalSHATime = 0;
@@ -35,6 +42,39 @@ my $totalSHATime = 0;
 my $totalMetadataQueryTime = 0.;
 my $totalLocationQueryTime = 0.;
 my $totalLocationUpdateTime = 0.;
+
+#================================================================
+sub getSamSha($$) {
+    my ($ua,$pathname) = @_;
+    my $fn = basename($pathname);
+
+    # Get sha256 from file metadata
+    my $req = HTTP::Request->new(GET => 'https://samwebgpvm01.fnal.gov:8483/sam/mu2e/api/files/name/'.basename($pathname).'/metadata?format=json');
+
+    my $t1 = [gettimeofday()];
+    my $res = $ua->request($req);
+    $totalMetadataQueryTime += tv_interval($t1);
+
+    if ($res->is_success) {
+        my $jstext = $res->content;
+        print "got json = $jstext\n" if $verbosity > 8;
+        my $js = from_json($jstext);
+
+        my $jssha = ${$js}{'dh.sha256'};
+        die "Error: no dh.sha256 SAM record for file $pathname\n" unless defined $jssha;
+        return $jssha;
+    }
+    else {
+        if(404 == $res->code) {
+            # this file has not been registered in SAM
+            return undef;
+        }
+        else {
+            print STDERR "Error querying file metadata. Dump of the server response:\n", Dumper($res), "\n";
+            die "Stopping on error: ", $res->status_line, ". ", $res->content, "\n";
+        }
+    }
+}
 
 #================================================================
 sub isNotVerified($$) {
@@ -48,7 +88,7 @@ sub isNotVerified($$) {
     if ($res->is_success) {
         my $jstext = $res->content;
         my $js = from_json($jstext);
-        print "Got locations for $pathname: ",Dumper($js), "\n" if $verbosity > 3;
+        print "Got locations for $pathname: ",Dumper($js), "\n" if $verbosity > 8;
         die "Error: expect a JSON array when querying file locations.  Got instead: '$jstext'\n"
             unless ref $js eq 'ARRAY';
         foreach my $entry (@$js) {
@@ -58,7 +98,7 @@ sub isNotVerified($$) {
         }
     }
     else {
-        print STDERR "Error querying file locations. Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 0;
+        print STDERR "Error querying file locations. Dump of the server response:\n", Dumper($res), "\n";
         die "Stopping on error: ", $res->status_line, ". ", $res->content, "\n";
     }
 
@@ -66,105 +106,171 @@ sub isNotVerified($$) {
 }
 
 #================================================================
-sub makeSamLocation($) {
-    return dirname($_[0]);
-#tmp    my ($pathname) = @_;
-#tmp    my $dir = dirname($pathname);
-#tmp    return "enstore:".$dir if $dir =~ m|^/pnfs/mu2e/scratch|;
-#tmp    return "enstore:".$dir if $dir =~ m|^/pnfs/mu2e/persistent|;
-#tmp    return "mu2edata:".$dir if $dir =~ m|^/mu2e/data|;
-#tmp    die "Error: makeSamLocation('$pathname'): unknonw file location.\n";
+sub tapeBacked($) {
+    return $_[0] =~ /$ENV{MU2E_DSROOT_TAPE}/;
 }
 
 #================================================================
-sub addLocationToSam($$) {
-    my ($ua, $pathname) = @_;
+sub default_add_location($) {
+    # By default add location for tape-backed files
+    return tapeBacked($_[0]);
+}
+
+#================================================================
+sub getEnstoreInfo($) {
+    my ($pathname) = @_;
+    my $l4fn = dirname($pathname) . '/.(use)(4)(' . basename($pathname) . ')';
+
+    open(my $FH, '<', $l4fn) or return undef; # not on tape yet
+
+    my $tape = <$FH>;
+    die "Can not get tape label from pnfs layer 4   $l4fn: $!\n"
+        unless defined $tape;
+    chomp $tape;
+
+    my $cookie = <$FH>;
+    die "Can not get location cookie from pnfs layer 4   $l4fn: $!\n"
+        unless defined $cookie;
+    chomp $cookie;
+    $cookie =~ s/_//g;
+
+    return Mu2eEnstoreInfo->new(volume=>$tape, location_cookie=> 0 + $cookie);
+}
+
+#================================================================
+sub hexdigest($) {
+    my ($pathname) = @_;
+
+    my $t1hash = [gettimeofday()];
+
+    # compute sha256 for the file
+    my $dig = Digest->new('SHA-256');
+    open(my $fh, '<', $pathname) or die "Error opening $pathname for reading: $!\n";
+    $dig->addfile($fh);
+    close $fh;
+
+    $totalSHATime += tv_interval($t1hash);
+
+    my $st = stat($pathname) or die "Error stating $pathname: $!\n";
+    $totalReadBytes += $st->size;
+
+    return $dig->hexdigest;
+}
+
+#================================================================
+sub makeSamLocation($$) {
+    my ($pathname, $tapeinfo) = @_;
+    my $dir = dirname($pathname);
+
+    if(tapeBacked($pathname)) {
+        return 'enstore:'.$dir.'('.$tapeinfo->location_cookie.'@'.$tapeinfo->volume.')';
+    }
+    else {
+        return "dcache:".$dir   if $dir =~ m|^/pnfs/mu2e/persistent|;
+        return "dcache:".$dir   if $dir =~ m|^/pnfs/mu2e/scratch|;
+        die "Error: makeSamLocation('$pathname'): unknown file location.\n";
+    }
+}
+
+#================================================================
+sub maybeAddLocationToSam($$$) {
+    my ($ua, $pathname, $tapeinfo) = @_;
+
+    my $location = makeSamLocation($pathname, $tapeinfo);
 
     # Note: the documentation at
     # https://cdcvs.fnal.gov/redmine/projects/sam-web/wiki/Interface_definitions
     # specifies HTTP PUT for adding a location. However it seems we should use POST instead.
-    print +($add_location ? "Adding" : "Would add"). " to SAM location = $pathname\n" if $verbosity > 2;
-    if($add_location) {
+
+    my $dryrun = not ($add_location // default_add_location($pathname));
+
+    print +($dryrun ? "Would add" : "Adding" ). " to SAM location = $location\n" if $verbosity > 8;
+    if(not $dryrun) {
 
         my $t1 = [gettimeofday()];
 
         my $res = $ua->request(
             POST 'https://samwebgpvm01.fnal.gov:8483/sam/mu2e/api/files/name/'.basename($pathname).'/locations',
-            Content => {'add' => $pathname }
+            Content => {'add' => $location }
             );
 
         $totalLocationUpdateTime += tv_interval($t1);
 
         if ($res->is_success) {
-            print "Added location $pathname to SAM. Server response:\n", Dumper($res), "\n" if $verbosity > 3;
+            print "Added location $pathname to SAM. Server response:\n", Dumper($res), "\n" if $verbosity > 8;
+            ++$numAddedLocation;
         }
         else {
-            print STDERR "Error adding file location $pathname. Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 0;
+            print STDERR "Error adding file location $pathname. Dump of the server response:\n", Dumper($res), "\n";
             die "Stopping on error: ", $res->status_line, ". ", $res->content, "\n";
         }
     }
-
 }
 
 #================================================================
 sub processFile($$) {
     my ($ua, $pathname) = @_;
 
-    if($force or isNotVerified($ua, $pathname)) {
-        my $now_string = localtime();
-        print "Starting $pathname on $now_string\n"
-            if $verbosity > 0;
+    ++$numTotalFiles;
 
-        my $t1 = [gettimeofday()];
+    my $samsha = getSamSha($ua, $pathname);
+    if(defined $samsha) {
 
-        # Get sha256 from file metadata
-        my $req = HTTP::Request->new(GET => 'https://samwebgpvm01.fnal.gov:8483/sam/mu2e/api/files/name/'.basename($pathname).'/metadata?format=json');
-        my $res = $ua->request($req);
+        if($redo or isNotVerified($ua, $pathname)) {
 
-        $totalMetadataQueryTime += tv_interval($t1);
+            my $now_string = localtime();
+            print "...... $now_string starting $pathname ......\n" if $verbosity > 2;
 
-        if ($res->is_success) {
-            my $jstext = $res->content;
-            print "got json = $jstext\n" if $verbosity > 3;
-            my $js = from_json($jstext);
+            my $passed = 0;
+            my $tapeinfo;
 
-            my $jssha = ${$js}{'dh.sha256'};
-            die "Error: no dh.sha256 record for file $pathname\n" unless defined $jssha;
-
-
-            my $t1hash = [gettimeofday()];
-
-            # compute sha256 for the file
-            my $dig = Digest->new('SHA-256');
-            open(my $fh, '<', $pathname) or die "Error opening $pathname for reading: $!\n";
-            $dig->addfile($fh);
-            close $fh;
-
-            $totalSHATime += tv_interval($t1);
-
-            my $st = stat($pathname) or die "Error stating $pathname: $!\n";
-            $totalReadBytes += $st->size;
-
-            ++$numChecked;
-
-            if($dig->hexdigest eq $jssha) {
-                print "OK: $pathname\n" if $verbosity > 1;
-                addLocationToSam($ua, $pathname);
+            if(tapeBacked($pathname)) {
+                print "Tape backed: $pathname\n";
+                $tapeinfo = getEnstoreInfo($pathname);
+                if(not defined $tapeinfo) {
+                    ++$numNoTape;
+                    print "NO_TAPE_LABEL: $pathname\n";
+                }
+                else {
+                    print "Got enstore info: tape = ",$tapeinfo->volume,
+                    ", cookie = ",$tapeinfo->location_cookie,"\n"
+                        if $verbosity > 8;
+                }
             }
-            else {
-                print "Bad: $pathname\n" if $verbosity > 0;
-                ++$numBad;
+
+            if(!tapeBacked($pathname) or defined $tapeinfo) {
+                if(hexdigest($pathname) eq $samsha) {
+                    $passed = 1;
+                    print "OK: $pathname\n" if $verbosity > 1;
+                    ++$numGood;
+                }
+                else {
+                    print "BADHASH: $pathname\n";
+                    ++$numBad;
+                }
+            }
+
+            if($passed) {
+                maybeAddLocationToSam($ua, $pathname, $tapeinfo);
             }
         }
         else {
-            print STDERR "Error querying file metadata. Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 0;
-            die "Stopping on error: ", $res->status_line, ". ", $res->content, "\n";
+            ++$numSkipped;
+            print "SKIPPED: $pathname\n" if $verbosity > 3;
         }
     }
     else {
-        ++$numSkipped;
-        print "Already verified: $pathname\n" if $verbosity > 2;
+        ++$numNoSam;
+        print "NOT_IN_SAM: ",basename($pathname),"\n";
     }
+}
+
+#================================================================
+sub myAgentID() {
+    # Production versions have the *_DIR enviroment variable set by UPS.
+    my $ver = $ENV{'MU2EFILETOOLS_DIR'} // 'dev';
+    $ver = basename($ver);
+    return "mu2eFileVerify/$ver";
 }
 
 #================================================================
@@ -174,24 +280,40 @@ sub usage() {
 Usage:
         $self [options]
 
-Reads names of json files from STDIN, and verifies their sha256
-checksums agains SAM metadata.
+Reads names of files from STDIN, verifies their sha256 checksums
+against SAM metadata, and prints results.  For files in the
+tape-backed location the script makes sure that a file is on tape (has
+an enstore tape volume label) before proceeding with other checks.
+Locations of successfully verified files are optionally added to the
+SAM database.  If there is a SAM location record that matches an input
+file, the processing of the file is skipped by default, as is should
+have been verified already.
 
 Options:
 
-    --[no]add-sam-location [Do not] add location of a successfully
-    verified file to the SAM database.
+    --[no]add-sam-location  [Do not] add location of a successfully
+                            verified file to the SAM database.  By
+                            default files in $ENV{MU2E_DSROOT_TAPE}
+                            have their locations added to SAM while
+                            files in other upload areas do not.
 
-    --force Verify all files, without skipping those that have their
-    locations already registered.
+    --redo                  Process all files, without skipping those
+                            that have their locations already registered.
 
-    --verbosity=<int> Verbosity level.  The default is 1.
+    --verbosity=<int>       Verbosity level. The default is $verbosity.
+                            1 print a line per file that failed verification
+                            2 printouts for OK and failed, but not skipped files
+                            3 also print a  'starting' message before attempting
+                              FS operations that can hang
+                            4 add printouts for skipped files
+                            9 debug
 
-    --help Print this message.
+    --help                  Print this message.
 
-Before using this script, run kx509 to generate authentication files
-to connect to the server.  Or set environment variables
-HTTPS_CERT_FILE and HTTPS_KEY_FILE to point to the appropriate files.
+If you intend to add file locations to SAM, run kx509 to generate
+authentication files before running the script. Or set environment
+variables HTTPS_CERT_FILE and HTTPS_KEY_FILE to point to appropriate
+files.
 
 EOF
 ;
@@ -200,7 +322,7 @@ EOF
 # Process command line opts.
 GetOptions(\%opt,
            "add-sam-location!",
-           "force",
+           "redo",
            "verbosity=i",
            "help",
            )
@@ -214,7 +336,7 @@ if($opt{'help'}) {
 $ENV{HTTPS_CERT_FILE} = '/tmp/x509up_u'.$EUID unless defined $ENV{HTTPS_CERT_FILE};
 $ENV{HTTPS_KEY_FILE}  = '/tmp/x509up_u'.$EUID unless defined $ENV{HTTPS_KEY_FILE};
 
-my $ua = LWP::UserAgent->new;
+my $ua = LWP::UserAgent->new( keep_alive=>1, agent=>myAgentID() );
 
 while(my $line = <STDIN>) {
     chomp($line);
@@ -225,7 +347,9 @@ printf "Computed SHA-256 on %.3f GB in %.2f s\n", $totalReadBytes/1024/1024/1024
 printf "SAMWeb times: query metadata = %.2f s,  query location = %.2f s, update location = %.2f s\n",
     $totalMetadataQueryTime, $totalLocationQueryTime, $totalLocationUpdateTime;
 
-print "Summary: checked $numChecked files, found $numBad bad.  Skipped verification of $numSkipped files.\n";
+print "Summary1: out of $numTotalFiles input files $numNoSam were not registered in SAM, and $numSkipped had been verified earlier.\n";
+print "Summary2: successfully verified $numGood files, added locations for $numAddedLocation files.\n";
+print "Summary3: found $numBad corrupted files and $numNoTape files without tape labels.\n";
 
 exit 0;
 
