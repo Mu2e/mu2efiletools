@@ -233,7 +233,6 @@ sub processFile($$) {
             my $tapeinfo;
 
             if(tapeBacked($pathname)) {
-                print "Tape backed: $pathname\n";
                 $tapeinfo = getEnstoreInfo($pathname);
                 if(not defined $tapeinfo) {
                     ++$numNoTape;
