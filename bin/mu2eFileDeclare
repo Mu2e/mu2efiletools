@@ -141,7 +141,7 @@ EOF
 # Process command line opts.
 GetOptions(\%opt,
            "delete-json!",
-           "server",
+           "server=s",
            "maxtries=i",
            "delay=i",
            "verbosity=i",
