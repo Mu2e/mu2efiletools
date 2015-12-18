@@ -202,7 +202,6 @@ if($totalCopyTime > 0.1) {
     my $throughput = sprintf "%.2f MiB/s", $totalCopiedBytes/1024./1024./$totalCopyTime;
     print "The average throughput was $sz in $totalCopyTime s = $throughput\n";
 }
-print "\n";
 
 exit 0;
 
