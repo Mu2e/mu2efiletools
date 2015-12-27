@@ -32,11 +32,11 @@ my $totalServerTime = 0;
 sub processFile($$) {
     my ($ua, $jsname) = @_;
     print "Processing file $jsname\n" if $verbosity > 1;
-    die "Error: expect .json files on input. Got: \"$jsname\""
+    die "Error: expect .json files on input. Got: \"$jsname\" on ".localtime()."\n"
         unless $jsname =~ /\.json$/;
 
     my $FH;
-    open(FH, "<", $jsname) or die "Can not open $jsname: $!\n";
+    open(FH, "<", $jsname) or die "Can not open $jsname: $! on ".localtime()."\n";
     my $jstext;
     while(my $line = <FH>) {
         $jstext .= $line;
@@ -69,15 +69,15 @@ sub processFile($$) {
         if ($res->is_success) {
             print "Dump of the server response:\n" , Dumper($res), "\n" if $verbosity > 1;
             if($delete_json) {
-                unlink $jsname or die "Error deleting file $jsname: $!\n";
+                unlink $jsname or die "Error deleting file $jsname: $! on ".localtime()."\n";
                 print "Deleted $jsname\n" if $verbosity > 1;
             }
-            print "Successfully processed file $jsname on $now_string\n" if $verbosity > 0;
             $done = 1;
             ++$totalFiles;
+            print "Successfully processed file $totalFiles  $jsname on $now_string\n" if $verbosity > 0;
         }
         else {
-            print STDERR "Got ",$res->status_line," on $now_string\n" if $verbosity > 0;
+            print STDERR "Got ",$res->status_line," on $now_string, processing file $jsname\n" if $verbosity > 0;
             print STDERR "Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 1;
             if($numtries >= $maxtries) {
                 die "Error: $maxtries tries failed. Stopping on $now_string due to: ",

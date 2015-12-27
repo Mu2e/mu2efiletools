@@ -62,22 +62,22 @@ sub processFile($) {
 
     if(-e $stdpath) {
         ++$numSkipped;
-        print "Skipped file $infile\n" if $verbosity > 1;
+        print +($numCopied+$numMoved+$numSkipped)." Skipped file $infile\n" if $verbosity > 1;
     }
     else {
 
         my $dirpath = dirname($stdpath);
         if(!$dryrun) {
             make_path($dirpath);
-            -d $dirpath or die "Error creating dir path $dirpath: $!\n";
+            -d $dirpath or die "Error creating dir path $dirpath: $! on ".localtime()."\n";
         }
         my $now_string = localtime();
 
         my $copy = needToCopy($infile);
         if($copy)  {
-            my $st = stat($infile) or die "Error stating $infile: $!\n";
+            my $st = stat($infile) or die "Error stating $infile: $! on ".localtime()."\n";
 
-            print +($dryrun ? "Would start" : "Starting"),
+            print +($numCopied+$numMoved+$numSkipped) , ($dryrun ? "  Would start" : "  Starting"),
             " to transfer ", $st->size, " bytes in $infile to $stdpath on $now_string\n"
                 if $verbosity > 0;
 
@@ -86,7 +86,7 @@ sub processFile($) {
                 # Use high precision time to measure the data transfer rate.
                 my $t1 = [gettimeofday()];
 
-                copy($infile, $stdpath) or die "Error copying $infile to $stdpath: $!\n";
+                copy($infile, $stdpath) or die "Error copying $infile to $stdpath: $! on ".localtime()."\n";
 
                 my $elapsed = tv_interval($t1);
 
@@ -102,11 +102,11 @@ sub processFile($) {
             ++$numCopied;
         }
         else {
-            print +($dryrun ? "Would move" : "Moving"), " $infile to $stdpath on $now_string\n"
+            print +($numCopied+$numMoved+$numSkipped), ($dryrun ? " Would move" : " Moving"), " $infile to $stdpath on $now_string\n"
                 if $verbosity > 0;
 
             if(!$dryrun) {
-                rename($infile, $stdpath) or die "Error in rename($infile, $stdpath): $!\n";
+                rename($infile, $stdpath) or die "Error in rename($infile, $stdpath): $! on ".localtime()."\n";
             }
             ++$numMoved;
         }

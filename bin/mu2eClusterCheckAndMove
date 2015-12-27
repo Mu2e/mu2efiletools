@@ -194,7 +194,7 @@ sub maybe_rename($$) {
     my ($src, $dst) = @_;
     print "\t", ($dryrun ? "Would move":"Moving" ) ,": $src ====> $dst\n" if $verbosity > 1;
     if(!$dryrun) {
-        rename($src, $dst) or die "Error in rename($src, $dst): $!\n";
+        rename($src, $dst) or die "Error in rename($src, $dst): $!  on " . localtime() . "\n";
     }
 }
 
@@ -208,7 +208,7 @@ sub moveFailedJob($$$) {
     if(!-d $subdir and not $dryrun) {
         File::Path::make_path($subdir); # don't die: parallel uploads create a race condition
         # if make_path() failed because of a race, the directory must exist
-        -d $subdir or die "Error creating directory $subdir: $!\n";
+        -d $subdir or die "Error creating directory $subdir: $! on ". localtime() ."\n";
     }
 
     my $dstname = $subdir .'/'. basename($jobdir);
@@ -256,7 +256,7 @@ sub moveGoodJob($$) {
         my $gooddir = dirname($dstdir);
         if(not -d $gooddir) {
             File::Path::make_path($gooddir)
-                or die "Error creating directory $gooddir: $!\n";
+                or die "Error creating directory $gooddir: $! on ".localtime()."\n";
         }
     }
     maybe_rename($jobdir, $dstdir);
@@ -395,7 +395,7 @@ sub isTooRecent($) {
     my ($jobdir) = @_;
 
     # FIXME: also check time stamps of all the files, not just the dir?
-    my $st = stat($jobdir) or die "Can't stat($jobdir): $!\n";
+    my $st = stat($jobdir) or die "Can't stat($jobdir): $! on ".localtime()."\n";
     my $now = time();
     # print "$jobdir mtime = ", $st->mtime, ", which is ", $now - $st->mtime,  " seconds ago\n";
     return ($now - $st->mtime) < $timecut;
@@ -407,11 +407,11 @@ sub processClusterDir($) {
     my $clusterdir = abs_path($in);
 
     my $CLD0;
-    opendir(CLD0, $clusterdir) or die "Can't opendir($clusterdir): $!\n";
+    opendir(CLD0, $clusterdir) or die "Can't opendir($clusterdir): $! on ".localtime()."\n";
     while(my $sd1 = readdir(CLD0)) {
         next if $sd1 =~ /^\./;
         my $CLD1;
-        opendir(CLD1, "$clusterdir/$sd1") or die "Can't opendir($clusterdir/$sd1): $!\n";
+        opendir(CLD1, "$clusterdir/$sd1") or die "Can't opendir($clusterdir/$sd1): $! on ".localtime()."\n";
         while(my $sd2 = readdir(CLD1)) {
             next if $sd2 =~ /^\./;
 

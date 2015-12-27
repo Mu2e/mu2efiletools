@@ -79,7 +79,7 @@ sub getSamSha($$) {
         }
         else {
             print STDERR "Error querying file metadata. Dump of the server response:\n", Dumper($res), "\n";
-            die "Stopping on error: ", $res->status_line, ". ", $res->content, "\n";
+            die "Stopping on error: ", $res->status_line, ". ", $res->content, " on ".localtime()."\n";
         }
     }
 }
@@ -97,7 +97,7 @@ sub isNotVerified($$) {
         my $jstext = $res->content;
         my $js = from_json($jstext);
         print "Got locations for $pathname: ",Dumper($js), "\n" if $verbosity > 8;
-        die "Error: expect a JSON array when querying file locations.  Got instead: '$jstext'\n"
+        die "Error: expect a JSON array when querying file locations.  Got instead: '$jstext' on ".localtime()."\n"
             unless ref $js eq 'ARRAY';
         foreach my $entry (@$js) {
             my $loc = ${$entry}{'location'};
@@ -107,7 +107,7 @@ sub isNotVerified($$) {
     }
     else {
         print STDERR "Error querying file locations. Dump of the server response:\n", Dumper($res), "\n";
-        die "Stopping on error: ", $res->status_line, ". ", $res->content, "\n";
+        die "Stopping on error: ", $res->status_line, ". ", $res->content, " on ".localtime()."\n";
     }
 
     return 1;
@@ -132,12 +132,12 @@ sub getEnstoreInfo($) {
     open(my $FH, '<', $l4fn) or return undef; # not on tape yet
 
     my $tape = <$FH>;
-    die "Can not get tape label from pnfs layer 4   $l4fn: $!\n"
+    die "Can not get tape label from pnfs layer 4   $l4fn: $! on ".localtime()."\n"
         unless defined $tape;
     chomp $tape;
 
     my $cookie = <$FH>;
-    die "Can not get location cookie from pnfs layer 4   $l4fn: $!\n"
+    die "Can not get location cookie from pnfs layer 4   $l4fn: $! on ".localtime()."\n"
         unless defined $cookie;
     chomp $cookie;
     $cookie =~ s/_//g;
@@ -153,13 +153,13 @@ sub hexdigest($) {
 
     # compute sha256 for the file
     my $dig = Digest->new('SHA-256');
-    open(my $fh, '<', $pathname) or die "Error opening $pathname for reading: $!\n";
+    open(my $fh, '<', $pathname) or die "Error opening $pathname for reading: $! on ".localtime()."\n";
     $dig->addfile($fh);
     close $fh;
 
     $totalSHATime += tv_interval($t1hash);
 
-    my $st = stat($pathname) or die "Error stating $pathname: $!\n";
+    my $st = stat($pathname) or die "Error stating $pathname: $! on ".localtime()."\n";
     $totalReadBytes += $st->size;
 
     return $dig->hexdigest;
@@ -210,7 +210,7 @@ sub maybeAddLocationToSam($$$) {
         }
         else {
             print STDERR "Error adding file location $pathname. Dump of the server response:\n", Dumper($res), "\n";
-            die "Stopping on error: ", $res->status_line, ". ", $res->content, "\n";
+            die "Stopping on error: ", $res->status_line, ". ", $res->content, " on ".localtime()."\n";
         }
     }
 }
@@ -248,11 +248,11 @@ sub processFile($$) {
             if(!tapeBacked($pathname) or defined $tapeinfo) {
                 if(hexdigest($pathname) eq $samsha) {
                     $passed = 1;
-                    print "OK: $pathname\n" if $verbosity > 1;
+                    print "OK: $numTotalFiles $pathname\n" if $verbosity > 1;
                     ++$numGood;
                 }
                 else {
-                    print "BADHASH: $pathname\n";
+                    print "BADHASH: $numTotalFiles $pathname\n";
                     ++$numBad;
                 }
             }
@@ -263,12 +263,12 @@ sub processFile($$) {
         }
         else {
             ++$numSkipped;
-            print "SKIPPED: $pathname\n" if $verbosity > 3;
+            print "SKIPPED: $numTotalFiles $pathname\n" if $verbosity > 3;
         }
     }
     else {
         ++$numNoSam;
-        print "NOT_IN_SAM: ",basename($pathname),"\n";
+        print "NOT_IN_SAM: $numTotalFiles ",basename($pathname),"\n";
     }
 }
 
