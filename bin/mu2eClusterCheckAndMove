@@ -71,7 +71,7 @@ sub dsttop($) {
             $res = "/mu2e/data/checked/$username";
         }
         else {
-            die "No heuristic to determine --dsttop for $jobdir  Please use the --dsttop command like option.\n";
+            die "No heuristic to determine --dsttop for $jobdir  Please use the --dsttop command line option.\n";
         }
     }
 
