@@ -2,7 +2,7 @@
 #
 # Verifies the checksum of a file.
 #
-# A.Gaponenko, 2015
+# A.Gaponenko, 2015, 2016
 #
 
 use strict;
@@ -23,6 +23,8 @@ use Class::Struct Mu2eEnstoreInfo => [volume=>'$', location_cookie=>'$'];
 
 my $add_location;
 my $redo=0;
+my $maxtries = 3;
+my $delay = 60;
 my $verbosity=3;
 
 my $samweb_write_server = 'https://samweb.fnal.gov:8483';
@@ -32,6 +34,8 @@ my %opt = ( 'add-sam-location'=>\$add_location,
             'redo'=>\$redo,
             'read-server' =>\$samweb_read_server,
             'write-server' =>\$samweb_write_server,
+            maxtries=> \$maxtries,
+            delay=>\$delay,
             verbosity=>\$verbosity,
             help=>0 );
 
@@ -57,29 +61,44 @@ sub getSamSha($$) {
     my $fn = basename($pathname);
 
     # Get sha256 from file metadata
-    my $req = HTTP::Request->new(GET => $samweb_read_server.'/sam/mu2e/api/files/name/'.basename($pathname).'/metadata?format=json');
+    my $req = HTTP::Request->new(GET => $samweb_read_server.'/sam/mu2e/api/files/name/'.$fn.'/metadata?format=json');
 
-    my $t1 = [gettimeofday()];
-    my $res = $ua->request($req);
-    $totalMetadataQueryTime += tv_interval($t1);
+    my $numtries = 0;
+    while(1) {
+        ++$numtries;
 
-    if ($res->is_success) {
-        my $jstext = $res->content;
-        print "got json = $jstext\n" if $verbosity > 8;
-        my $js = from_json($jstext);
+        my $t1 = [gettimeofday()];
+        my $res = $ua->request($req);
+        $totalMetadataQueryTime += tv_interval($t1);
+        my $now_string = localtime();
 
-        my $jssha = ${$js}{'dh.sha256'};
-        die "Error: no dh.sha256 SAM record for file $pathname\n" unless defined $jssha;
-        return $jssha;
-    }
-    else {
-        if(404 == $res->code) {
-            # this file has not been registered in SAM
-            return undef;
+        if ($res->is_success) {
+            my $jstext = $res->content;
+            print "got json = $jstext\n" if $verbosity > 8;
+            my $js = from_json($jstext);
+
+            my $jssha = ${$js}{'dh.sha256'};
+            die "Error: no dh.sha256 SAM record for file $pathname on $now_string\n" unless defined $jssha;
+            return $jssha;
         }
         else {
-            print STDERR "Error querying file metadata. Dump of the server response:\n", Dumper($res), "\n";
-            die "Stopping on error: ", $res->status_line, ". ", $res->content, " on ".localtime()."\n";
+            if(404 == $res->code) {
+                # this file has not been registered in SAM
+                return undef;
+            }
+            else {
+                print STDERR "Error querying metadata for file $fn: ",$res->status_line," on $now_string\n" if $verbosity > 0;
+                print STDERR "Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 8;
+                if($numtries >= $maxtries) {
+                    die "Error: $numtries tries failed. Stopping on $now_string due to: ",
+                    $res->status_line, ".\n", $res->content,"\n";
+                }
+                else {
+                    print STDERR "Will retry in $delay seconds\n" if $verbosity > 0;
+                    sleep $delay;
+                    $delay += int(rand($delay));
+                }
+            }
         }
     }
 }
@@ -87,30 +106,50 @@ sub getSamSha($$) {
 #================================================================
 sub isNotVerified($$) {
     my ($ua, $pathname) = @_;
+    my $fn = basename($pathname);
 
     my $t1 = [gettimeofday()];
-    my $req = HTTP::Request->new(GET => $samweb_read_server.'/sam/mu2e/api/files/name/'.basename($pathname).'/locations?format=json');
-    my $res = $ua->request($req);
-    $totalLocationQueryTime += tv_interval($t1);
+    my $req = HTTP::Request->new(GET => "$samweb_read_server/sam/mu2e/api/files/name/$fn/locations?format=json");
 
-    if ($res->is_success) {
-        my $jstext = $res->content;
-        my $js = from_json($jstext);
-        print "Got locations for $pathname: ",Dumper($js), "\n" if $verbosity > 8;
-        die "Error: expect a JSON array when querying file locations.  Got instead: '$jstext' on ".localtime()."\n"
-            unless ref $js eq 'ARRAY';
-        foreach my $entry (@$js) {
-            my $loc = ${$entry}{'location'};
-            my $dn = dirname($pathname);
-            return 0 if defined $loc and $loc =~ m|$dn|;
+    my $numtries = 0;
+    while(1) {
+        ++$numtries;
+
+        my $res = $ua->request($req);
+        $totalLocationQueryTime += tv_interval($t1);
+
+        if ($res->is_success) {
+            my $jstext = $res->content;
+            my $js = from_json($jstext);
+            print "Got locations for $fn: ",Dumper($js), "\n" if $verbosity > 8;
+
+            die "Error: expect a JSON array when querying file locations.  Got instead: '$jstext' on ".localtime()."\n"
+                unless ref $js eq 'ARRAY';
+
+            foreach my $entry (@$js) {
+                my $loc = ${$entry}{'location'};
+                my $dn = dirname($pathname);
+                return 0 if defined $loc and $loc =~ m|$dn|;
+            }
+
+            return 1;
+        }
+        else {
+            print STDERR "Error querying locations for file $fn: ",$res->status_line," on ".localtime()."\n" if $verbosity > 0;
+
+            print STDERR "Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 8;
+
+            if($numtries >= $maxtries) {
+                die "Error: $numtries tries failed. Stopping on ".localtime()." due to: ",
+                $res->status_line, ".\n", $res->content,"\n";
+            }
+            else {
+                print STDERR "Will retry in $delay seconds\n" if $verbosity > 0;
+                sleep $delay;
+                $delay += int(rand($delay));
+            }
         }
     }
-    else {
-        print STDERR "Error querying file locations. Dump of the server response:\n", Dumper($res), "\n";
-        die "Stopping on error: ", $res->status_line, ". ", $res->content, " on ".localtime()."\n";
-    }
-
-    return 1;
 }
 
 #================================================================
@@ -183,6 +222,7 @@ sub makeSamLocation($$) {
 #================================================================
 sub maybeAddLocationToSam($$$) {
     my ($ua, $pathname, $tapeinfo) = @_;
+    my $fn = basename($pathname);
 
     my $location = makeSamLocation($pathname, $tapeinfo);
 
@@ -195,24 +235,40 @@ sub maybeAddLocationToSam($$$) {
     print +($dryrun ? "Would add" : "Adding" ). " to SAM location = $location\n" if $verbosity > 8;
     if(not $dryrun) {
 
-        my $t1 = [gettimeofday()];
+        my $numtries = 0;
+        while(1) {
+            ++$numtries;
 
-        my $res = $ua->request(
-            POST $samweb_write_server.'/sam/mu2e/api/files/name/'.basename($pathname).'/locations',
-            Content => {'add' => $location }
-            );
+            my $t1 = [gettimeofday()];
+            my $res = $ua->request(
+                POST $samweb_write_server.'/sam/mu2e/api/files/name/'.$fn.'/locations',
+                Content => {'add' => $location }
+                );
 
-        $totalLocationUpdateTime += tv_interval($t1);
+            $totalLocationUpdateTime += tv_interval($t1);
 
-        if ($res->is_success) {
-            print "Added location $pathname to SAM. Server response:\n", Dumper($res), "\n" if $verbosity > 8;
-            ++$numAddedLocation;
-        }
-        else {
-            print STDERR "Error adding file location $pathname. Dump of the server response:\n", Dumper($res), "\n";
-            die "Stopping on error: ", $res->status_line, ". ", $res->content, " on ".localtime()."\n";
-        }
-    }
+            if ($res->is_success) {
+                print "Added location $pathname to SAM. Server response:\n", Dumper($res), "\n" if $verbosity > 8;
+                ++$numAddedLocation;
+                return;
+            }
+            else {
+                print STDERR "Error adding location $pathname for for file $fn: ",$res->status_line," on ".localtime()."\n" if $verbosity > 0;
+                print STDERR "Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 8;
+
+                if($numtries >= $maxtries) {
+                    die "Error: $numtries tries failed. Stopping on ".localtime()." due to: ",
+                    $res->status_line, ".\n", $res->content,"\n";
+                }
+                else {
+                    print STDERR "Will retry in $delay seconds\n" if $verbosity > 0;
+                    sleep $delay;
+                    $delay += int(rand($delay));
+                }
+            }
+
+        } # retry loop
+    } # not(dryrun)
 }
 
 #================================================================
@@ -226,8 +282,7 @@ sub processFile($$) {
 
         if($redo or isNotVerified($ua, $pathname)) {
 
-            my $now_string = localtime();
-            print "...... $now_string starting $pathname ......\n" if $verbosity > 2;
+            print "...... ".localtime()." starting $pathname ......\n" if $verbosity > 2;
 
             my $passed = 0;
             my $tapeinfo;
@@ -313,6 +368,15 @@ Options:
     --write-server          Samweb server to write file locations. The default is
                             $samweb_write_server
 
+
+    --maxtries=<int>        Give up after the given number of failures
+                            to post a request to the server. The default
+                            is $maxtries.
+
+    --delay=<int>           Delay, in seconds, before retry on the first failure.
+                            The default is $delay seconds.
+                            The subsequent delays are randomly increased.
+
     --verbosity=<int>       Verbosity level. The default is $verbosity.
                             1 print a line per file that failed verification
                             2 printouts for OK and failed, but not skipped files
@@ -338,6 +402,8 @@ GetOptions(\%opt,
            "redo",
            "read-server=s",
            "write-server=s",
+           "maxtries=i",
+           "delay=i",
            "verbosity=i",
            "help",
            )
