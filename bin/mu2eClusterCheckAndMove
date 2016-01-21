@@ -395,10 +395,19 @@ sub isTooRecent($) {
     my ($jobdir) = @_;
 
     # FIXME: also check time stamps of all the files, not just the dir?
-    my $st = stat($jobdir) or die "Can't stat($jobdir): $! on ".localtime()."\n";
     my $now = time();
-    # print "$jobdir mtime = ", $st->mtime, ", which is ", $now - $st->mtime,  " seconds ago\n";
-    return ($now - $st->mtime) < $timecut;
+
+    # It is OK for the stat() call here to fail: the NNNNN.xxxxx
+    # directories get renamed by completing grid jobs, so there is a
+    # race condition.  If the stat() fails just assume the candidate
+    # dir is too fresh to be analyzed.
+
+    my $too_recent = 1;
+    if(my $st = stat($jobdir)) {
+        $too_recent = (($now - $st->mtime) < $timecut);
+    }
+
+    return $too_recent;
 }
 
 #================================================================
