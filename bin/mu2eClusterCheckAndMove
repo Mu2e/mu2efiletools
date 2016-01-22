@@ -50,28 +50,17 @@ my %errorCodes = (
 
 #================================================================
 sub dsttop($) {
-    my ($indir) = @_;
-    my $jobdir = abs_path($indir);
-
+    my ($clusterdir) = @_;
     my $res = $opt{'dsttop'};
 
     if(not defined $res) {
 
-        my $username = getpwuid($EUID);
-        die "Error: can not determine effective username.  You can try the --dsttop option to work around this check.\n"
-            unless defined $username;
-
-        if( $jobdir =~ m'^/pnfs/mu2e/persistent/outstage' ) {
-            $res = "/pnfs/mu2e/persistent/checked/$username";
-        }
-        elsif( $jobdir =~ m'^/pnfs/mu2e/scratch/outstage' )  {
-            $res = "/pnfs/mu2e/scratch/checked/$username";
-        }
-        elsif( $jobdir =~ m'^/mu2e/data/outstage' )  {
-            $res = "/mu2e/data/checked/$username";
+        if($clusterdir =~ m'^(.*)/workflow/([^/]+)/outstage/([^/]+)$') {
+            my ($prefix, $project, $cluster) = ($1, $2, $3);
+            $res = "$prefix/workflow/$project";
         }
         else {
-            die "No heuristic to determine --dsttop for $jobdir  Please use the --dsttop command line option.\n";
+            die "No heuristic to determine --dsttop for $clusterdir\nPlease use the --dsttop command line option.\n";
         }
     }
 
@@ -204,7 +193,7 @@ sub moveFailedJob($$$) {
 
     ++$jobStats{$reason};
 
-    my $subdir = dirname("$dsttop/$reason/" . reljobdir($jobdir));
+    my $subdir = dirname("$dsttop/failed/$reason/" . reljobdir($jobdir));
     if(!-d $subdir and not $dryrun) {
         File::Path::make_path($subdir); # don't die: parallel uploads create a race condition
         # if make_path() failed because of a race, the directory must exist
@@ -276,11 +265,9 @@ sub isDuplicated($$) {
 }
 
 #================================================================
-sub processJobDir($) {
-    my ($jobdir) = @_;
+sub processJobDir($$) {
+    my ($jobdir, $dsttop) = @_;
     print "Processing $jobdir\n" if $verbosity > 1;
-
-    my $dsttop = dsttop($jobdir);
 
     my $failed = 1;
     my @filesToUpload;
@@ -413,7 +400,10 @@ sub isTooRecent($) {
 #================================================================
 sub processClusterDir($) {
     my ($in) = @_;
-    my $clusterdir = abs_path($in);
+    my $clusterdir = abs_path($in)
+        or die "Error: can not determine abs_path for $in\n";
+
+    my $dsttop = dsttop($clusterdir);
 
     my $CLD0;
     opendir(CLD0, $clusterdir) or die "Can't opendir($clusterdir): $! on ".localtime()."\n";
@@ -431,7 +421,7 @@ sub processClusterDir($) {
                 next;
             }
 
-            processJobDir($jobdir);
+            processJobDir($jobdir, $dsttop);
         }
         closedir(CLD1);
     }
@@ -463,11 +453,11 @@ The supported options are
                           a grid process.  The default --timecut is $timecut seconds.
 
     --dsttop=<direcory>   Use the specified directory as the destination area.
-                          If this option is not specified, files from subdirectories of
-                          /pnfs/mu2e/persistent/outstage will be moved to
-                          /pnfs/mu2e/persistent/checked/<username>
-                          (where <username> is the user running this script)
-                          and similar for pnfs scratch and /mu2e/data.
+                          Grid job directories will be moved into <dsttop>/good
+                          or subdirs of <dsttop>/failed.
+                          If the --dsttop option is not specified, a cluster from from
+                          <prefix>/workflow/<wfproject>/outstage   will use
+                          <prefix>/workflow/<wfproject>   as --dsttop.
 
     --dry-run             Analyze jobdirs, but do not move the files.
 
