@@ -424,8 +424,10 @@ sub processClusterDir($) {
             processJobDir($jobdir, $dsttop);
         }
         closedir(CLD1);
+        rmdir "$clusterdir/$sd1" unless $dryrun; # OK to fail here
     }
     closedir(CLD0);
+    rmdir "$clusterdir" unless $dryrun; # OK to fail here
 }
 
 #================================================================
