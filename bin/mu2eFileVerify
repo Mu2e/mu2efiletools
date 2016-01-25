@@ -421,7 +421,13 @@ my $ua = LWP::UserAgent->new( keep_alive=>1, agent=>myAgentID() );
 
 while(my $line = <STDIN>) {
     chomp($line);
-    processFile($ua, abs_path($line));
+    my $pathname = abs_path($line);
+    if($pathname // 0) {
+        processFile($ua, $pathname);
+    }
+    else {
+        die "Error: can not determine absolute pathname for input line \"$line\"\n";
+    }
 }
 
 printf "Computed SHA-256 on %.3f GB in %.2f s\n", $totalReadBytes/1024/1024/1024,  $totalSHATime;
