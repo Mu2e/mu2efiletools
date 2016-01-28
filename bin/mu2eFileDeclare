@@ -162,8 +162,22 @@ if($opt{'help'}) {
 die "ERROR: Got non-option command line parameters.  Try the --help option.\n"
     unless $#ARGV ==  -1;
 
-$ENV{HTTPS_CERT_FILE} = '/tmp/x509up_u'.$EUID unless defined $ENV{HTTPS_CERT_FILE};
-$ENV{HTTPS_KEY_FILE}  = '/tmp/x509up_u'.$EUID unless defined $ENV{HTTPS_KEY_FILE};
+
+sub checkAuthFile {
+    for my $name (@_) {
+        if(defined $ENV{$name}) {
+            die "Error: the file $ENV{$name} specified  by environment variable $name is not readable.\n"
+                unless -r $ENV{$name};
+        }
+        else {
+            $ENV{$name} = '/tmp/x509up_u'.$EUID;
+            die "Error: the file $ENV{$name} is not readable. Run kx509?\n"
+                unless -r $ENV{$name};
+        }
+    }
+}
+
+checkAuthFile('HTTPS_CERT_FILE', 'HTTPS_KEY_FILE');
 
 my $ua = LWP::UserAgent->new( keep_alive=>1, agent=>myAgentID() );
 
