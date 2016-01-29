@@ -68,7 +68,7 @@ sub optDocString {
                  and HTTPS_KEY_FILE to point to appropriate files.
 
 --maxtries=<int> Give up after the given number of failures
-                 to post a request to the server. The default
+                 when sending a request to the server. The default
                  is $maxtries.
 
 --delay=<int>    Delay, in seconds, before retry on the first failure.
