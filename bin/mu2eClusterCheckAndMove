@@ -19,6 +19,15 @@ use Getopt::Long;
 use Digest;
 use Data::Dumper;
 
+use Class::Struct Mu2eLogFileInfo => [
+    manifest_selfhash=>'$',
+    logfilehash=>'$',
+    workerFileSize=>'%',
+    workerFileDigest=>'%',
+    payload_started=>'$',
+    payload_ok=>'$',
+    ];
+
 my $timecut = 2*3600; # in seconds
 my $verbosity=1;
 my $dryrun=0;
@@ -153,8 +162,8 @@ sub processLogFile($) {
                     }
                     else {
                         print "\tError parsing manifest line \"$line\" in $logFileName\n" if $verbosity;
-                        # returning empty list will mark this job as failed
-                        return;
+                        # returning an uninitialized object will mark this job as failed
+                        return Mu2eLogFileInfo->new;
                     }
                 }
             }
@@ -171,11 +180,20 @@ sub processLogFile($) {
             }
         }
 
-        return ($manifest_selfhash, $loghash->hexdigest, \%workerFileSize, \%workerFileDigest, $payload_started, $payload_ok);
+        return Mu2eLogFileInfo->new(manifest_selfhash=>$manifest_selfhash,
+                                    logfilehash=>$loghash->hexdigest,
+                                    workerFileSize=>\%workerFileSize,
+                                    workerFileDigest=>\%workerFileDigest,
+                                    payload_started=>$payload_started,
+                                    payload_ok=>$payload_ok,
+            );
     }
     else {
         print "\tError opening log file $logFileName\n" if $verbosity;
     }
+
+    # returning an uninitialized object will mark this job as failed
+    return Mu2eLogFileInfo->new;
 }
 
 #================================================================
@@ -293,21 +311,20 @@ sub processJobDir($$) {
             last CHECK;
         }
 
-        my ($manifest_selfhash, $logfilehash, $workerFileSize, $workerFileDigest, $payload_started, $payload_ok)
-            = processLogFile($logFileName);
+        my $loginfo = processLogFile($logFileName);
 
-        if(not defined $payload_ok) {
+        if(not defined $loginfo->payload_ok) {
             moveFailedJob($jobdir, $dsttop, LOGCHECK());
             last CHECK;
         }
 
-        if($payload_started and !$payload_ok) {
+        if($loginfo->payload_started and !$loginfo->payload_ok) {
             print "\tJob did not run correctly in $jobdir\n" if $verbosity;
             moveFailedJob($jobdir, $dsttop, EXITSTAT());
             last CHECK;
         }
 
-        if($manifest_selfhash ne $logfilehash) {
+        if($loginfo->manifest_selfhash ne $loginfo->logfilehash) {
             print "\tLog file checksum mismatch for $jobdir\n" if $verbosity;
             moveFailedJob($jobdir, $dsttop, LOGCHECK());
             last CHECK;
@@ -316,8 +333,8 @@ sub processJobDir($$) {
         # Look at the files listed in the manifest:
         # Make sure each file is paired with its json
         my $jsonpattern = '\.json$';
-        my @contentFiles = grep { ! /$jsonpattern/ } keys %$workerFileDigest;
-        my @metaFiles = grep {  /$jsonpattern/ } keys %$workerFileDigest;
+        my @contentFiles = grep { ! /$jsonpattern/ } keys %{$loginfo->workerFileDigest};
+        my @metaFiles = grep {  /$jsonpattern/ } keys %{$loginfo->workerFileDigest};
         if($#contentFiles != $#metaFiles) {
             print "\tNumber of content and json files does not agree for $jobdir\n" if $verbosity;
             moveFailedJob($jobdir, $dsttop, METAPAIRED());
@@ -333,10 +350,10 @@ sub processJobDir($$) {
         }
 
         # Verify integrity of files listed in the manifest:
-        foreach my $fn (keys %$workerFileDigest) {
+        foreach my $fn (keys %{$loginfo->workerFileDigest}) {
             my $st = stat($jobdir.'/'. $fn);
 
-            if(!$st or $st->size != $$workerFileSize{$fn}) {
+            if(!$st or $st->size != $loginfo->workerFileSize($fn)) {
                 print "\tError stat-ing file $jobdir/$fn\n" if $verbosity;
                 moveFailedJob($jobdir, $dsttop, DATASIZE());
                 last CHECK;
@@ -347,7 +364,7 @@ sub processJobDir($$) {
             # uploaded (and are small).   The checkAndMove step is a good
             # place to verify them.
             if($opt{'verify-data'} or $fn =~ /\.json$/) {
-                if(!verifyDigest($jobdir.'/'.$fn, $$workerFileDigest{$fn})) {
+                if(!verifyDigest($jobdir.'/'.$fn, $loginfo->workerFileDigest($fn))) {
                     print "\tDigest mismatch for $jobdir/$fn\n" if $verbosity;
                     moveFailedJob($jobdir, $dsttop, DATACHECK());
                     last CHECK;
