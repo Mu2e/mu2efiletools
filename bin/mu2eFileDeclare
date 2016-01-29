@@ -13,24 +13,25 @@ use File::Basename;
 use Time::HiRes qw(gettimeofday tv_interval);
 use Data::Dumper;
 
+use lib dirname($0);
+use Mu2eSWI;
+
 my $delete_json = 1;
-my $sam_web_server = 'https://samwebgpvm01.fnal.gov:8483';
-my $maxtries = 3;
-my $delay = 60;
 my $verbosity=1;
+my $sw = Mu2eSWI->new;
+
 my %opt = ('delete-json'=>\$delete_json,
-           server=>\$sam_web_server,
-           maxtries=> \$maxtries,
-           delay=>\$delay,
            verbosity=>\$verbosity,
-           help=>0 );
+           help=>0,
+           %{$sw->optDefaults},
+    );
 
 my $totalFiles= 0;
 my $totalServerTime = 0;
 
 #================================================================
 sub processFile($$) {
-    my ($ua, $jsname) = @_;
+    my ($sw, $jsname) = @_;
     print "Processing file $jsname\n" if $verbosity > 1;
     die "Error: expect .json files on input. Got: \"$jsname\" on ".localtime()."\n"
         unless $jsname =~ /\.json$/;
@@ -44,11 +45,12 @@ sub processFile($$) {
     close FH;
 
     # Create a request
-    my $req = HTTP::Request->new(POST => $sam_web_server . '/sam/mu2e/api/files');
+    my $req = HTTP::Request->new(POST => $sw->write_server . '/sam/mu2e/api/files');
     $req->content_type('application/json');
     $req->content($jstext);
 
     my $numtries = 0;
+    my $delay = $sw->delay;
     my $done = 0;
     while(not $done) {
 
@@ -58,7 +60,7 @@ sub processFile($$) {
         my $t1 = [gettimeofday()];
 
         # Pass request to the user agent and get a response back
-        my $res = $ua->request($req);
+        my $res = $sw->ua->request($req);
 
         my $elapsed = tv_interval($t1);
         $totalServerTime += $elapsed;
@@ -84,8 +86,8 @@ sub processFile($$) {
                 die "Error: conflict with a previously declared file. Stop.\n";
             }
 
-            if($numtries >= $maxtries) {
-                die "Error: $maxtries tries failed. Stopping on $now_string due to: ",
+            if($numtries >= $sw->maxtries) {
+                die "Error: $numtries tries failed. Stopping on $now_string due to: ",
                 $res->status_line, ".\n", $res->content,"\n";
             }
             else {
@@ -96,14 +98,6 @@ sub processFile($$) {
         }
     }
 
-}
-
-#================================================================
-sub myAgentID() {
-    # Production versions have the *_DIR enviroment variable set by UPS.
-    my $ver = $ENV{'MU2EFILETOOLS_DIR'} // 'dev';
-    $ver = basename($ver);
-    return "mu2eFileDeclare/$ver";
 }
 
 #================================================================
@@ -119,16 +113,9 @@ the json input file is deleted. The supported options are
 
         --nodelete-json       Do not delete json files.
 
-        --server=<string>     Samweb server to contact. The default is
-                              $sam_web_server
-
-        --maxtries=<int>      Give up after the given number of failures
-                              to post a request to the server. The default
-                              is $maxtries.
-
-        --delay=<int>         Delay, in seconds, before retry on the first failure.
-                              The default is $delay seconds.
-                              The subsequent delays are randomly increased.
+EOF
+. $sw->optDocString(' 'x8,' 'x5) .
+<<EOF
 
         --verbosity=<int>     Verbosity level.  The default is 1.
 
@@ -146,11 +133,9 @@ EOF
 # Process command line opts.
 GetOptions(\%opt,
            "delete-json!",
-           "server=s",
-           "maxtries=i",
-           "delay=i",
            "verbosity=i",
            "help",
+           @{$sw->optSpec},
     )
     or die "\nError processing command line options.\n";
 
@@ -179,11 +164,9 @@ sub checkAuthFile {
 
 checkAuthFile('HTTPS_CERT_FILE', 'HTTPS_KEY_FILE');
 
-my $ua = LWP::UserAgent->new( keep_alive=>1, agent=>myAgentID() );
-
 while(my $line = <STDIN>) {
     chomp($line);
-    processFile($ua, $line);
+    processFile($sw, $line);
 
 }
 
