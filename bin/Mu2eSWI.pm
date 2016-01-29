@@ -9,6 +9,7 @@ package Mu2eSWI;
 use strict;
 use Exporter qw( import );
 use English '-no_match_vars';
+use Carp;
 use File::Basename;
 use LWP::UserAgent;
 use Data::Dumper;
@@ -96,22 +97,31 @@ sub ua {
 
 sub authConfig {
     my ($self) = @_;
-    my $checkVars = sub {
-        for my $name (@_) {
-            if(defined $ENV{$name}) {
-                die "Error: the file $ENV{$name} specified  by environment variable $name is not readable.\n"
-                    unless -r $ENV{$name};
-            }
-            else {
-                $ENV{$name} = '/tmp/x509up_u'.$EUID;
-                die "Error: the file $ENV{$name} is not readable. Run kx509?\n"
-                    unless -r $ENV{$name};
-            }
-        }
-    };
-    &$checkVars('HTTPS_CERT_FILE', 'HTTPS_KEY_FILE');
-}
 
+    my $numvars = (defined $ENV{'HTTPS_CERT_FILE'} ? 1 : 0)
+        + (defined $ENV{'HTTPS_KEY_FILE'} ? 1 : 0);
+
+    if($numvars == 0) {
+        my $filename = '/tmp/x509up_u'.$EUID;
+        die "Error: no HTTPS_KEY_FILE and HTTPS_CERT_FILE in the environment, and file $filename does not exist.\n"
+            ."Run kx509 and try again.\n"
+            unless -r $filename;
+
+        $ENV{'HTTPS_CERT_FILE'} = $filename;
+        $ENV{'HTTPS_KEY_FILE'} = $filename;
+    }
+    elsif($numvars == 1) {
+        croak "Error: either both or none of HTTPS_CERT_FILE, HTTPS_KEY_FILE environment variables should be defined.\n";
+    }
+    else {
+        my $checkFiles = sub {
+            for my $name (@_) {
+                croak "Error: the file $ENV{$name} specified  by environment variable $name is not readable.\n"
+                    unless -r $ENV{$name};
+            }
+        };
+    }
+}
 
 sub new {
     my ($class) = @_;
