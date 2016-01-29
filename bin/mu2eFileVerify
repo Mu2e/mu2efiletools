@@ -368,11 +368,6 @@ EOF
 
     --help                  Print this message.
 
-If you intend to add file locations to SAM, run kx509 to generate
-authentication files before running the script. Or set environment
-variables HTTPS_CERT_FILE and HTTPS_KEY_FILE to point to appropriate
-files.
-
 EOF
 ;
 }
@@ -392,8 +387,7 @@ if($opt{'help'}) {
     exit 0;
 }
 
-$ENV{HTTPS_CERT_FILE} = '/tmp/x509up_u'.$EUID unless defined $ENV{HTTPS_CERT_FILE};
-$ENV{HTTPS_KEY_FILE}  = '/tmp/x509up_u'.$EUID unless defined $ENV{HTTPS_KEY_FILE};
+$sw->authConfig();
 
 while(my $line = <STDIN>) {
     chomp($line);

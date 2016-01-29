@@ -8,6 +8,7 @@
 package Mu2eSWI;
 use strict;
 use Exporter qw( import );
+use English '-no_match_vars';
 use File::Basename;
 use LWP::UserAgent;
 use Data::Dumper;
@@ -57,8 +58,13 @@ sub optDocString {
 --read-server    Samweb server for querying. The default is
                  $read_server
 
---write-server   Samweb server to write file locations. The default is
-                 $write_server
+--write-server   Samweb server to write information to SAM.
+                 The default is $write_server
+
+                 If you intend to modify SAM database, run kx509
+                 to generate authentication files before running the
+                 script. Or set environment variables HTTPS_CERT_FILE
+                 and HTTPS_KEY_FILE to point to appropriate files.
 
 --maxtries=<int> Give up after the given number of failures
                  to post a request to the server. The default
@@ -87,6 +93,25 @@ sub ua {
     my ($self) = @_;
     return $self->{'Mu2eSWI::_ua'};
 }
+
+sub authConfig {
+    my ($self) = @_;
+    my $checkVars = sub {
+        for my $name (@_) {
+            if(defined $ENV{$name}) {
+                die "Error: the file $ENV{$name} specified  by environment variable $name is not readable.\n"
+                    unless -r $ENV{$name};
+            }
+            else {
+                $ENV{$name} = '/tmp/x509up_u'.$EUID;
+                die "Error: the file $ENV{$name} is not readable. Run kx509?\n"
+                    unless -r $ENV{$name};
+            }
+        }
+    };
+    &$checkVars('HTTPS_CERT_FILE', 'HTTPS_KEY_FILE');
+}
+
 
 sub new {
     my ($class) = @_;

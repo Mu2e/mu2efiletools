@@ -121,10 +121,6 @@ EOF
 
         --help                Print this message.
 
-Before using this script, run kx509 to generate authentication files
-to connect to the server.  Or set environment variables
-HTTPS_CERT_FILE and HTTPS_KEY_FILE to point to the appropriate files.
-
 EOF
 ;
 }
@@ -147,22 +143,7 @@ if($opt{'help'}) {
 die "ERROR: Got non-option command line parameters.  Try the --help option.\n"
     unless $#ARGV ==  -1;
 
-
-sub checkAuthFile {
-    for my $name (@_) {
-        if(defined $ENV{$name}) {
-            die "Error: the file $ENV{$name} specified  by environment variable $name is not readable.\n"
-                unless -r $ENV{$name};
-        }
-        else {
-            $ENV{$name} = '/tmp/x509up_u'.$EUID;
-            die "Error: the file $ENV{$name} is not readable. Run kx509?\n"
-                unless -r $ENV{$name};
-        }
-    }
-}
-
-checkAuthFile('HTTPS_CERT_FILE', 'HTTPS_KEY_FILE');
+$sw->authConfig();
 
 while(my $line = <STDIN>) {
     chomp($line);
