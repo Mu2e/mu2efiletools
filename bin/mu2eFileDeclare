@@ -32,6 +32,7 @@ my $totalServerTime = 0;
 #================================================================
 sub processFile($$) {
     my ($sw, $jsname) = @_;
+
     print "Processing file $jsname\n" if $verbosity > 1;
     die "Error: expect .json files on input. Got: \"$jsname\" on ".localtime()."\n"
         unless $jsname =~ /\.json$/;
@@ -44,60 +45,17 @@ sub processFile($$) {
     }
     close FH;
 
-    # Create a request
-    my $req = HTTP::Request->new(POST => $sw->write_server . '/sam/mu2e/api/files');
-    $req->content_type('application/json');
-    $req->content($jstext);
+    $sw->declareFile($jstext, {serverDeclareTime=>\$totalServerTime, verbosity=>$verbosity});
 
-    my $numtries = 0;
-    my $delay = $sw->delay;
-    my $done = 0;
-    while(not $done) {
-
-        ++$numtries;
-
-        # Measure the timing
-        my $t1 = [gettimeofday()];
-
-        # Pass request to the user agent and get a response back
-        my $res = $sw->ua->request($req);
-
-        my $elapsed = tv_interval($t1);
-        $totalServerTime += $elapsed;
-
-        my $now_string = localtime();
-
-        # Check the outcome of the response
-        if ($res->is_success) {
-            print "Dump of the server response:\n" , Dumper($res), "\n" if $verbosity > 1;
-            if($delete_json) {
-                unlink $jsname or die "Error deleting file $jsname: $! on ".localtime()."\n";
-                print "Deleted $jsname\n" if $verbosity > 1;
-            }
-            $done = 1;
-            ++$totalFiles;
-            print "Successfully processed file $totalFiles  $jsname on $now_string\n" if $verbosity > 0;
-        }
-        else {
-            print STDERR "Got ",$res->status_line," on $now_string, processing file $jsname\n" if $verbosity > 0;
-            print STDERR "Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 1;
-
-            if(409 == $res->code) {
-                die "Error: conflict with a previously declared file. Stop.\n";
-            }
-
-            if($numtries >= $sw->maxtries) {
-                die "Error: $numtries tries failed. Stopping on $now_string due to: ",
-                $res->status_line, ".\n", $res->content,"\n";
-            }
-            else {
-                print STDERR "Will retry in $delay seconds\n" if $verbosity > 0;
-                sleep $delay;
-                $delay += int(rand($delay));
-            }
-        }
+    if($delete_json) {
+        unlink $jsname or die "Error deleting file $jsname: $! on ".localtime()."\n";
+        print "Deleted $jsname\n" if $verbosity > 1;
     }
 
+    ++$totalFiles;
+
+    my $now_string = localtime();
+    print "Successfully processed file $totalFiles  $jsname on $now_string\n" if $verbosity > 0;
 }
 
 #================================================================

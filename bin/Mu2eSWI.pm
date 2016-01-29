@@ -12,6 +12,9 @@ use English '-no_match_vars';
 use Carp;
 use File::Basename;
 use LWP::UserAgent;
+use HTTP::Request;
+use HTTP::Status qw(:constants);
+use Time::HiRes qw(gettimeofday tv_interval);
 use Data::Dumper;
 
 use Class::Struct Mu2eSWIFields =>
@@ -95,6 +98,23 @@ sub ua {
     return $self->{'Mu2eSWI::_ua'};
 }
 
+sub new {
+    my ($class) = @_;
+
+    my $self = $class->SUPER::new(
+        delay=>60,
+        maxtries=>3,
+        read_server=>'http://samweb.fnal.gov:8480',
+        write_server=>'https://samweb.fnal.gov:8483',
+        );
+
+    $self->{'Mu2eSWI::_ua'} = LWP::UserAgent->new(keep_alive=>1, agent=>_agentID);
+    $self->ua->conn_cache->total_capacity(5);
+
+    return $self;
+}
+
+#================================================================
 sub authConfig {
     my ($self) = @_;
 
@@ -123,20 +143,96 @@ sub authConfig {
     }
 }
 
-sub new {
-    my ($class) = @_;
+#================================================================
+# The last argument is a reference to a hash.  The call behavior is
+# affected by the following keys, all of which are optional:
+#
+# verbosity         : the verbosity level. Default is 1.
+#
+# serverDeclareTime : the value will be treated as a ref to a scalar,
+#                     and the scalar will be incremented by the time
+#                     spent talking to the server.
+#
+# noRetryCodes      : a reference to list of HTTP failure codes on
+#                     which the request is not retried. See
+#                     the code below for the default list.
+#
+# allowedFailCodes  : a reference to list of HTTP failure codes on
+#                     which to return failure instead of retrying or
+#                     croaking.  If the list is empty (or not
+#                     defined), the method either succeeds or croaks.
+#
+# The return value is the server response (from the last re-try, if any).
 
-    my $self = $class->SUPER::new(
-        delay=>60,
-        maxtries=>3,
-        read_server=>'http://samweb.fnal.gov:8480',
-        write_server=>'https://samweb.fnal.gov:8483',
-        );
+sub declareFile {
+    my ($self, $jstext, $inopts) = @_;
+    my $opts = $inopts // {};
+    my $timing = $$opts{'serverDeclareTime'};
 
-    $self->{'Mu2eSWI::_ua'} = LWP::UserAgent->new(keep_alive=>1, agent=>_agentID);
-    $self->ua->conn_cache->total_capacity(5);
+    my $verbosity = $$opts{'verbosity'} // 1;
+    my $allowedFailCodes = $$opts{'allowedFailCodes'} // [];
+    my $noRetryCodes = $$opts{'noRetryCodes'} // [ HTTP_CONFLICT ];
 
-    return $self;
+    # Create a request
+    my $req = HTTP::Request->new(POST => $self->write_server . '/sam/mu2e/api/files');
+    $req->content_type('application/json');
+    $req->content($jstext);
+
+    my $numtries = 0;
+    my $delay = $self->delay;
+
+    while(1) {
+
+        ++$numtries;
+
+        # Measure the timing
+        my $t1 = $timing ? [gettimeofday()] : undef;
+
+        # Pass request to the user agent and get a response back
+        my $res = $self->ua->request($req);
+
+        if($timing) {
+            my $elapsed = tv_interval($t1);
+            $$timing += $elapsed;
+        }
+
+        # Check the outcome of the response
+        if ($res->is_success) {
+            return $res;
+        }
+        else {
+            # allowedFailCodes lists "failures" expected in the normal
+            # operation such as during the check for duplicate jobs.
+            # Return before the "debug" printouts below.
+            for my $code (@$allowedFailCodes) {
+                return $res if($code == $res->code);
+            }
+
+            my $now_string = localtime();
+
+            for my $code (@$noRetryCodes) {
+                if($code == $res->code) {
+                    croak "Error: got server response ",
+                    $res->status_line, ".\n",
+                    $res->content, "\n",
+                    "Stopping on $now_string.";
+                }
+            }
+
+            print STDERR "Got ",$res->status_line," on $now_string\n" if $verbosity > 0;
+            print STDERR "Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 1;
+
+            if($numtries >= $self->maxtries) {
+                croak "Error: $numtries tries failed. Stopping on $now_string due to: ",
+                $res->status_line, ".\n", $res->content,"\n";
+            }
+            else {
+                print STDERR "Will retry in $delay seconds\n" if $verbosity > 0;
+                sleep $delay;
+                $delay += int(rand($delay));
+            }
+        }
+    }
 }
 
 #================================================================
