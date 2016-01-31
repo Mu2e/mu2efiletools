@@ -17,7 +17,16 @@ use File::stat;
 use Cwd 'abs_path';
 use Getopt::Long;
 use Digest;
+use JSON;
+use HTTP::Status qw(:constants);
 use Data::Dumper;
+use Mu2eFilename;
+
+use lib dirname($0);
+use Mu2eSWI;
+
+# the fields correspond to metadata parameters of Mu2e job tracking entries in SAM.
+use Class::Struct Mu2eJobStats => [ cpu=>'$', maxres=>'$', node=>'$', site=>'$' ];
 
 use Class::Struct Mu2eLogFileInfo => [
     manifest_selfhash=>'$',
@@ -26,12 +35,22 @@ use Class::Struct Mu2eLogFileInfo => [
     workerFileDigest=>'%',
     payload_started=>'$',
     payload_ok=>'$',
+    parent_fcl=>'$',
+    job_stats=>'Mu2eJobStats',
     ];
 
 my $timecut = 2*3600; # in seconds
 my $verbosity=1;
 my $dryrun=0;
-my %opt = ('verify-data'=>0, 'timecut'=>\$timecut, verbosity=>\$verbosity, 'dry-run'=>\$dryrun, help=>0 );
+my $sw = Mu2eSWI->new;
+my %opt = ('verify-data'=>0,
+           'timecut'=>\$timecut,
+           verbosity=>\$verbosity,
+           'dry-run'=>\$dryrun,
+           help=>0,
+           oldhack=>0,
+           %{$sw->optDefaults},
+    );
 
 # constant strings used as keys in the jobStats hash
 use constant GOOD => '0good'; # make it sort first in the summary output.  That string is not exposed.
@@ -42,7 +61,8 @@ use constant EXITSTAT => 'exitstat';
 use constant DATASIZE => 'datasize';
 use constant METAPAIRED => 'metapaired';
 use constant DATACHECK => 'datacheck';
-use constant DUPLICATE => 'duplicate';
+use constant GRIDDUP => 'dup_grid';
+use constant RESUBDUP => 'dup_resub';
 my %jobStats;
 
 # A more readable description for the summary output
@@ -54,8 +74,12 @@ my %errorCodes = (
     DATASIZE() => 'wrong data or json file size',
     METAPAIRED() => 'a non-paired content or json file',
     DATACHECK() => 'corrupted data file',
-    DUPLICATE() => 'duplicate',
+    GRIDDUP() => 'duplicate (grid glitch)',
+    RESUBDUP() => 'duplicate (multiple submissions)',
     );
+
+# some execution statistics
+my $totalServerTime = 0;
 
 #================================================================
 sub dsttop($) {
@@ -129,6 +153,13 @@ sub processLogFile($) {
     my %workerFileSize;
     my %workerFileDigest;
 
+    my $parent_fcl;
+    my $job_stats = Mu2eJobStats->new;
+
+    my $parentRE =  $opt{'oldhack'} ?
+        '^origFCL *= *(.*)$' :
+        '^mu2eprodsys *origFCL *= *(.*)$';
+
     if(open(my $logfh, $logFileName)) {
 
         my $manifest_started = 0;
@@ -139,8 +170,25 @@ sub processLogFile($) {
                 $payload_started = 1;
             }
 
+            if($line =~ m/$parentRE/) {
+                $parent_fcl = $1;
+            }
+
             if($line =~ m/^mu2egrid exit status 0$/) {
                 $payload_ok = 1;
+            }
+
+            if($line =~ m/^([\d\.]+)user *([\d\.]+)system .*elapsed.* (\d+)maxresident/) {
+                $job_stats->cpu($1 + $2);
+                $job_stats->maxres($3);
+            }
+
+            if($line =~ m/^Starting *on *host *Linux *([^\s]+)\s/) {
+                $job_stats->node($1);
+            }
+
+            if($line =~ m/^GLIDEIN_Site *= *(.*)$/) {
+                $job_stats->site($1);
             }
 
             if($manifest_started) {
@@ -166,7 +214,7 @@ sub processLogFile($) {
                         return Mu2eLogFileInfo->new;
                     }
                 }
-            }
+            } # manifest_started
 
             if($line =~ m/^# mu2egrid manifest *$/) {
                 $manifest_started = 1;
@@ -178,6 +226,7 @@ sub processLogFile($) {
             else {
                 $loghash->add($line);
             }
+
         }
 
         return Mu2eLogFileInfo->new(manifest_selfhash=>$manifest_selfhash,
@@ -186,6 +235,8 @@ sub processLogFile($) {
                                     workerFileDigest=>\%workerFileDigest,
                                     payload_started=>$payload_started,
                                     payload_ok=>$payload_ok,
+                                    parent_fcl=>$parent_fcl,
+                                    job_stats=>$job_stats,
             );
     }
     else {
@@ -270,21 +321,68 @@ sub moveGoodJob($$) {
 }
 
 #================================================================
-sub isDuplicated($$) {
+sub isGridDup($$) {
     my ($jobdir, $dsttop) = @_;
 
     my $dstname = stripTmpSuffix("$dsttop/good/" . reljobdir($jobdir));
 
     my $res = (-e $dstname) ? 1 : 0;
     if($verbosity > 1) {
-        print "\tisDuplicated($jobdir) = $res\n";
+        print "\tisGridDup($jobdir) = $res\n";
     }
     return $res;
 }
 
 #================================================================
-sub processJobDir($$) {
-    my ($jobdir, $dsttop) = @_;
+sub isGlobalDup($$$) {
+    my ($sw, $logFileName, $loginfo) = @_;
+
+    my $lf = Mu2eFilename->parse(basename($logFileName));
+
+    my $parentfn = basename($loginfo->parent_fcl);
+    my $jtfn = join('.', 'job' , $lf->owner, $lf->configuration, $parentfn);
+
+    my $parentds = Mu2eFilename->parse($parentfn)->dataset->dsname;
+    my $jtds = join('.', 'job' , $lf->owner, $lf->configuration, $parentds);
+
+    my $st = $loginfo->job_stats;
+
+    my $json_text = to_json(
+        { data_tier => 'job',
+          file_name => $jtfn,
+          file_size => 0,
+          file_type => 'other',
+          parents => [ $parentfn ],
+          'dh.configuration' => $lf->configuration,
+          'dh.owner' => $lf->owner,
+          'dh.sequencer' => $lf->sequencer,
+          'dh.dataset' => $jtds,
+          'job.cpu' => int(0.5+$st->cpu),
+          'job.maxres' => $st->maxres,
+          'job.node' => $st->node,
+          'job.site' => $st->site,
+        });
+
+    print "\t", ($dryrun ? "Would" : "About to"), " post json = $json_text\n" if $verbosity > 1;
+
+    my $duplicate = 0;
+
+    if(!$dryrun) {
+        my $res = $sw->declareFile($json_text,
+                                   { serverDeclareTime=>\$totalServerTime,
+                                     verbosity=>$verbosity,
+                                     allowedFailCodes => [ HTTP_CONFLICT ]
+                                   });
+
+        $duplicate = not $res->is_success;
+    }
+
+    return $duplicate;
+}
+
+#================================================================
+sub processJobDir($$$) {
+    my ($sw, $jobdir, $dsttop) = @_;
     print "Processing $jobdir\n" if $verbosity > 1;
 
     my $failed = 1;
@@ -373,13 +471,19 @@ sub processJobDir($$) {
         }
 
         #----------------
-        # Detect duplicates.  Note: this is weak check.  The real one
-        # will be done during the file upload to its unique permanent
-        # location.  (Or during SAM registration.)
+        # Detect duplicates.  First, check for processes that completed more than
+        # once in the same cluster
+        if(isGridDup($jobdir, $dsttop)) {
+            print "\tDuplicated dir $jobdir, grid glitch\n" if $verbosity;
+            moveFailedJob($jobdir, $dsttop, GRIDDUP());
+            last CHECK;
+        }
 
-        if(isDuplicated($jobdir, $dsttop)) {
-            print "\tDuplicated dir $jobdir\n" if $verbosity;
-            moveFailedJob($jobdir, $dsttop, DUPLICATE());
+        #----------------
+        # Now do the global check via the SAM database
+        if(isGlobalDup($sw, $logFileName, $loginfo)) {
+            print "\tDuplicated dir $jobdir, multiple submissions\n" if $verbosity;
+            moveFailedJob($jobdir, $dsttop, RESUBDUP());
             last CHECK;
         }
 
@@ -415,8 +519,8 @@ sub isTooRecent($) {
 }
 
 #================================================================
-sub processClusterDir($) {
-    my ($in) = @_;
+sub processClusterDir($$) {
+    my ($sw, $in) = @_;
     my $clusterdir = abs_path($in)
         or die "Error: can not determine abs_path for $in\n";
 
@@ -438,7 +542,7 @@ sub processClusterDir($) {
                 next;
             }
 
-            processJobDir($jobdir, $dsttop);
+            processJobDir($sw, $jobdir, $dsttop);
         }
         closedir(CLD1);
         rmdir "$clusterdir/$sd1" unless $dryrun; # OK to fail here
@@ -471,12 +575,23 @@ The supported options are
                           given number of seconds - they may still be written by
                           a grid process.  The default --timecut is $timecut seconds.
 
-    --dsttop=<direcory>   Use the specified directory as the destination area.
+    --dsttop=<directory>  Use the specified directory as the destination area.
                           Grid job directories will be moved into <dsttop>/good
                           or subdirs of <dsttop>/failed.
                           If the --dsttop option is not specified, a cluster from from
                           <prefix>/workflow/<wfproject>/outstage   will use
                           <prefix>/workflow/<wfproject>   as --dsttop.
+
+    --oldhack             Since mu2egrid v3_01_01 job log files contain a
+                          dedicated line to convey parent fcl info.
+                          For older logs, origFCL info happens to be visible
+                          in the environment dump.  This options tells
+                          the script to get origFCL from the environment
+                          printout.
+
+EOF
+. $sw->optDocString(' 'x4, ' 'x5) .
+<<EOF
 
     --dry-run             Analyze jobdirs, but do not move the files.
 
@@ -500,6 +615,8 @@ GetOptions(\%opt,
            "dry-run",
            "stdin",
            "help",
+           "oldhack",
+           @{$sw->optSpec},
            )
     or die "\nError processing command line options.\n";
 
@@ -509,11 +626,16 @@ if($opt{'help'}) {
 }
 
 die "What job cluster(s) do you want to process? Try the --help option.\n" if ($#ARGV < 0);
+
+$sw->authConfig();
+
 foreach my $dir (@ARGV) {
-    processClusterDir($dir);
+    processClusterDir($sw, $dir);
 }
 
+print "Total time spend talking to SAMWEB server is $totalServerTime seconds\n";
 print "Summary: ", join(', ', (map { " $errorCodes{$_}: $jobStats{$_}" } sort keys %jobStats )), "\n";
+print "WARNING: can not check for duplicates with --dry-run\n" if $dryrun;
 
 exit 0;
 
