@@ -15,65 +15,31 @@ use File::Basename;
 use Mu2eFilename;
 use Mu2eDSName;
 
+use lib dirname($0);
+use Mu2eClusterDir;
+
 my $dsname='';
 my $json=0;
 my %opt = ('dsname'=>\$dsname, 'json'=>\$json, help=>0 );
 
 #================================================================
-# mu2eprodsys cluster structure limits the number of subdirs to 1000,
-# so it is OK to read them all in memory.  This function
-# is used to wrap the error handling.
-sub getDirEntries($) {
-    my ($dirname) = @_;
+sub processJobDir {
+    my ($jobdir) = @_;
+    my @filelist = Mu2eClusterDir::getDirEntries($jobdir);
 
-    # readdir(3) may return NULL on both success and failure.  The call
-    # does not change errno on success, but sets it on failure.
-    #
-    # I do not know if there is any error diagnostic for the
-    # incomplete directory listing issue on /pnfs. Try to catch it
-    # by pre-setting errno to 0 and testing it after readdir().
+    foreach my $fn (@filelist) {
+        next if $fn =~ /^\./;
 
-    opendir(my $CLD0, $dirname) or die "Can't opendir($dirname): $! on ".localtime()."\n";
-    $! = 0;
-    my @list0 = readdir($CLD0);
-    die "Error in readdir($dirname): $! on ".localtime()."\n" if $!;
-    closedir($CLD0) or die "Can't closedir($dirname): $! on ".localtime()."\n";
-
-    return @list0;
-}
-
-#================================================================
-sub processClusterDir($) {
-    my ($clusterdir) = @_;
-
-    # 00, 01, ...
-    my @dirlist0 = getDirEntries($clusterdir);
-    foreach my $sd1 (@dirlist0) {
-        next if $sd1 =~ /^\./;
-
-        # 00000, ...
-        my @dirlist1 = getDirEntries("$clusterdir/$sd1");
-        foreach my $sd2 (@dirlist1) {
-            next if $sd2 =~ /^\./;
-
-            my $jobdir= "$clusterdir/$sd1/$sd2";
-            my @filelist = getDirEntries($jobdir);
-
-            foreach my $fn (@filelist) {
-                next if $fn =~ /^\./;
-
-                ## --json vs --nojson
-                if($json) {
-                    next if $fn !~ s/\.json$//;
-                    my $pfn = Mu2eFilename->parse($fn);
-                    print "$jobdir/$fn.json\n" if($pfn->dataset->dsname eq $dsname);
-                }
-                else {
-                    next if $fn =~ /\.json$/;
-                    my $pfn = Mu2eFilename->parse($fn);
-                    print "$jobdir/$fn\n" if($pfn->dataset->dsname eq $dsname);
-                }
-            }
+        ## --json vs --nojson
+        if($json) {
+            next if $fn !~ s/\.json$//;
+            my $pfn = Mu2eFilename->parse($fn);
+            print "$jobdir/$fn.json\n" if($pfn->dataset->dsname eq $dsname);
+        }
+        else {
+            next if $fn =~ /\.json$/;
+            my $pfn = Mu2eFilename->parse($fn);
+            print "$jobdir/$fn\n" if($pfn->dataset->dsname eq $dsname);
         }
     }
 }
@@ -90,7 +56,7 @@ in the --dsname parameter, or their json counterparts if --json is
 used.  The files will be looked for in the directories listed on the
 command line.  The script assumes the directory structure that is
 produced by running mu2eprodsys jobs, and is intended to be used
-on cluster directories in the "checked" area.
+on cluster directories in the "good" area.
 
 Such listing of files can also be accomplished using the standard
 "find" program.  However "find" needs to stat() filesystem entries,
@@ -118,8 +84,7 @@ die "Error: --dsname is required. Try the --help option.\n" unless $dsname ne ''
 
 die "What job cluster(s) do you want to process? Try the --help option.\n" if ($#ARGV < 0);
 foreach my $dir (@ARGV) {
-    $dir =~ s|/$||;
-    processClusterDir($dir);
+    Mu2eClusterDir::iterate($dir, \&processJobDir);
 }
 
 exit 0;
