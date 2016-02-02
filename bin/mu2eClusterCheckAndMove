@@ -640,9 +640,9 @@ foreach my $in (@ARGV) {
     Mu2eClusterDir::iterate($dir, \&iterateCallBack, $sw, $dsttop);
 
     if(!$dryrun) {
-        my @subdirs = Mu2eClusterDir::getDirEntries($dir);
+        my @subdirs = grep { !/^\./ } Mu2eClusterDir::getDirEntries($dir);
         foreach my $d (@subdirs) {
-            rmdir $d; # OK to fail here
+            rmdir $dir.'/'.$d; # OK to fail here
         }
         rmdir $dir; # OK to fail here
     }
