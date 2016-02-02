@@ -22,7 +22,6 @@ use Mu2eSWI;
 my $sw = Mu2eSWI->new;
 
 my %opt = ( %{$sw->optDefaults},
-            pathname=>1,
             help=>0,
     );
 
@@ -52,10 +51,8 @@ sub printMissingJobs {
         while(($ieol = index($res->content, "\n", $istart)) > -1) {
             my $line = substr($res->content, $istart, $ieol-$istart);
             $istart = 1+$ieol;
-
             chomp $line;
-            my $out = $opt{'pathname'} ?  Mu2eFilename->parse($line)->abspathname_disk() : $line;
-            print $out, "\n";
+            print "$line\n";
         }
     }
     else {
@@ -77,10 +74,6 @@ did not complete successfully, as defined by mu2eClusterCheckAndMove.
 
 Options:
 
-    --[no]pathname     Print full pathnames of fcl files in the
-                       standard Mu2e fcl file area, instead of
-                       basenames of the files.  This is on by default.
-
 EOF
 . $sw->optDocString(' 'x4,' 'x2) .
 <<EOF
@@ -97,7 +90,6 @@ GetOptions(\%opt,
     "fclds=s",
     "dsowner=s",
     "dsconf=s",
-    "pathname!",
     "help",
     @{$sw->optSpec},
     )
