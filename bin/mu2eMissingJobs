@@ -1,0 +1,123 @@
+#!/usr/bin/perl -w
+#
+# Uses Mu2e "job tracking" dataset to get a list of fcl files for
+# which a set of jobs did not finish successfully (as defined by
+# mu2eClusterCheckAndMove).
+#
+# A.Gaponenko, 2016
+#
+
+use strict;
+use English '-no_match_vars';
+use Getopt::Long;
+use LWP::UserAgent;
+use URI;
+use Data::Dumper;
+use File::Basename;
+use Mu2eFilename;
+
+use lib dirname($0);
+use Mu2eSWI;
+
+my $sw = Mu2eSWI->new;
+
+my %opt = ( %{$sw->optDefaults},
+            pathname=>1,
+            help=>0,
+    );
+
+#================================================================
+sub jobTrackingDataset($$$) {
+    my ($fclds, $dsowner, $dsconf) = @_;
+    return join('.', 'job', $dsowner, $dsconf, $fclds);
+}
+#================================================================
+sub printMissingJobs {
+    my $fclds = $opt{'fclds'};
+    my $dsowner = $opt{'dsowner'};
+    my $dsconf = $opt{'dsconf'};
+
+    my $jobds = jobTrackingDataset($fclds, $dsowner, $dsconf);
+
+    my $url = URI->new( $sw->read_server.'/sam/mu2e/api/files/list' );
+    $url->query_form(
+        'format' => 'plain',
+        'dims' => "dh.dataset=$fclds minus (isparentof: (dh.dataset=$jobds)) with availability anylocation",
+        );
+
+    my $res = $sw->ua->get($url);
+    if($res->is_success) {
+        my $istart = 0; # offset into the content buffer
+        my $ieol;
+        while(($ieol = index($res->content, "\n", $istart)) > -1) {
+            my $line = substr($res->content, $istart, $ieol-$istart);
+            $istart = 1+$ieol;
+
+            chomp $line;
+            my $out = $opt{'pathname'} ?  Mu2eFilename->parse($line)->abspathname_disk() : $line;
+            print $out, "\n";
+        }
+    }
+    else {
+        # print Dumper($res),"\n";
+        die "Error: ", $res->status_line, ".\n", $res->content,"\n";
+    }
+}
+
+#================================================================
+sub usage() {
+    my $self = basename($0);
+    return <<EOF
+Usage:
+        $self --fclds=<fcl_dataset> --dsowner=<user> --dsconf=<conf> [options]
+
+Query the SAM database and print fcl file names for which a set of
+mu2eprodys jobs submitted with with the given --dsconf and --dsowner
+did not complete successfully, as defined by mu2eClusterCheckAndMove.
+
+Options:
+
+    --[no]pathname     Print full pathnames of fcl files in the
+                       standard Mu2e fcl file area, instead of
+                       basenames of the files.  This is on by default.
+
+EOF
+. $sw->optDocString(' 'x4,' 'x2) .
+<<EOF
+
+    --help             Print this message.
+
+EOF
+    ;
+}
+
+#================================================================
+# Process command line opts.
+GetOptions(\%opt,
+    "fclds=s",
+    "dsowner=s",
+    "dsconf=s",
+    "pathname!",
+    "help",
+    @{$sw->optSpec},
+    )
+    or die "\nError processing command line options.\n";
+
+if($opt{'help'}) {
+    print usage();
+    exit 0;
+}
+
+die "ERROR: Got non-option command line parameters.  Try the --help option.\n"
+    unless $#ARGV ==  -1;
+
+# Check that all of the required args are present:
+foreach my $k ('fclds', 'dsowner', 'dsconf') {
+    defined $opt{$k} or die "Error: --$k must be specified.  Try the --help option.\n";
+}
+
+printMissingJobs();
+
+exit 0;
+
+#================================================================
