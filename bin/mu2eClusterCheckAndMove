@@ -145,7 +145,8 @@ sub processLogFile($) {
     my ($logFileName) = @_;
 
     my $payload_started = 0;
-    my $payload_ok = 0;
+    my $mu2egrid_status_ok = 0;
+    my $art_status_ok = 0;
     my $manifest_selfhash='';
 
     # Note: dynamic determination of hash alg would need two passes over $logFileName
@@ -177,7 +178,11 @@ sub processLogFile($) {
             }
 
             if($line =~ m/^mu2egrid exit status 0$/) {
-                $payload_ok = 1;
+                $mu2egrid_status_ok = 1;
+            }
+
+            if($line =~ m/^Art has completed and will exit with status 0\.$/) {
+                $art_status_ok = 1;
             }
 
             if($line =~ m/^([\d\.]+)user *([\d\.]+)system .*elapsed.* (\d+)maxresident/) {
@@ -234,6 +239,8 @@ sub processLogFile($) {
         if($payload_started and not defined $parent_fcl) {
             die "Did not find information about parent fcl in $logFileName\nTry using the --oldhack option?\n";
         }
+
+        my $payload_ok = $mu2egrid_status_ok && $art_status_ok;
 
         return Mu2eLogFileInfo->new(manifest_selfhash=>$manifest_selfhash,
                                     logfilehash=>$loghash->hexdigest,
