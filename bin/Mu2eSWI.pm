@@ -171,7 +171,10 @@ sub declareFile {
 
     my $verbosity = $$opts{'verbosity'} // 1;
     my $allowedFailCodes = $$opts{'allowedFailCodes'} // [];
-    my $noRetryCodes = $$opts{'noRetryCodes'} // [ HTTP_CONFLICT ];
+    my $noRetryCodes = $$opts{'noRetryCodes'} //
+        [ HTTP_CONFLICT, # file already declared
+          HTTP_BAD_REQUEST, # bad metadata, e.g. unknown parent
+        ];
 
     # Create a request
     my $req = HTTP::Request->new(POST => $self->write_server . '/sam/mu2e/api/files');
