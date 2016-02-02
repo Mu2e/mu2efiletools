@@ -24,6 +24,7 @@ use Mu2eFilename;
 
 use lib dirname($0);
 use Mu2eSWI;
+use Mu2eClusterDir;
 
 # the fields correspond to metadata parameters of Mu2e job tracking entries in SAM.
 use Class::Struct Mu2eJobStats => [ cpu=>'$', maxres=>'$', node=>'$', site=>'$' ];
@@ -42,10 +43,12 @@ use Class::Struct Mu2eLogFileInfo => [
 my $timecut = 2*3600; # in seconds
 my $verbosity=1;
 my $dryrun=0;
+my $nosam=0;
 my $sw = Mu2eSWI->new;
 my %opt = ('verify-data'=>0,
            'timecut'=>\$timecut,
            verbosity=>\$verbosity,
+           'nosam' => \$nosam,
            'dry-run'=>\$dryrun,
            help=>0,
            oldhack=>0,
@@ -99,7 +102,6 @@ sub dsttop($) {
 
     return $res;
 }
-
 
 #================================================================
 # extract the "cluster/spreader/process" part from a potentially
@@ -227,6 +229,10 @@ sub processLogFile($) {
                 $loghash->add($line);
             }
 
+        }
+
+        if($payload_started and not defined $parent_fcl) {
+            die "Did not find information about parent fcl in $logFileName\nTry using the --oldhack option?\n";
         }
 
         return Mu2eLogFileInfo->new(manifest_selfhash=>$manifest_selfhash,
@@ -481,10 +487,12 @@ sub processJobDir($$$) {
 
         #----------------
         # Now do the global check via the SAM database
-        if(isGlobalDup($sw, $logFileName, $loginfo)) {
-            print "\tDuplicated dir $jobdir, multiple submissions\n" if $verbosity;
-            moveFailedJob($jobdir, $dsttop, RESUBDUP());
-            last CHECK;
+        if(not $nosam) {
+            if(isGlobalDup($sw, $logFileName, $loginfo)) {
+                print "\tDuplicated dir $jobdir, multiple submissions\n" if $verbosity;
+                moveFailedJob($jobdir, $dsttop, RESUBDUP());
+                last CHECK;
+            }
         }
 
         #----------------
@@ -519,36 +527,17 @@ sub isTooRecent($) {
 }
 
 #================================================================
-sub processClusterDir($$) {
-    my ($sw, $in) = @_;
-    my $clusterdir = abs_path($in)
-        or die "Error: can not determine abs_path for $in\n";
+# The order of args is fixed by Mu2eClusterDir::iterate
+# and is different than in other funtions here.
+sub iterateCallBack {
+    my ($jobdir, $sw, $dsttop) = @_;
 
-    my $dsttop = dsttop($clusterdir);
-
-    my $CLD0;
-    opendir(CLD0, $clusterdir) or die "Can't opendir($clusterdir): $! on ".localtime()."\n";
-    while(my $sd1 = readdir(CLD0)) {
-        next if $sd1 =~ /^\./;
-        my $CLD1;
-        opendir(CLD1, "$clusterdir/$sd1") or die "Can't opendir($clusterdir/$sd1): $! on ".localtime()."\n";
-        while(my $sd2 = readdir(CLD1)) {
-            next if $sd2 =~ /^\./;
-
-            my $jobdir= "$clusterdir/$sd1/$sd2";
-
-            if(isTooRecent($jobdir)) {
-                print "Skipping $jobdir:  too recent\n"  if $verbosity > 1;
-                next;
-            }
-
-            processJobDir($sw, $jobdir, $dsttop);
-        }
-        closedir(CLD1);
-        rmdir "$clusterdir/$sd1" unless $dryrun; # OK to fail here
+    if(isTooRecent($jobdir)) {
+        print "Skipping $jobdir:  too recent\n"  if $verbosity > 1;
     }
-    closedir(CLD0);
-    rmdir "$clusterdir" unless $dryrun; # OK to fail here
+    else {
+        processJobDir($sw, $jobdir, $dsttop);
+    }
 }
 
 #================================================================
@@ -593,6 +582,13 @@ EOF
 . $sw->optDocString(' 'x4, ' 'x5) .
 <<EOF
 
+    --nosam               Do not connect to the SAM server.  This will
+                          disable detection of duplicate jobs.  Also,
+                          mu2eMissingJobs will not work for clusters
+                          checked with --nosam.  This option is only
+                          needed to support use cases when the parent
+                          fcl dataset itself is not registered in SAM.
+
     --dry-run             Analyze jobdirs, but do not move the files.
 
     --verbosity=<int>     Verbosity level.  The default is 1.
@@ -608,16 +604,17 @@ EOF
 #================================================================
 # Process command line opts.
 GetOptions(\%opt,
-           "dsttop=s",
-           "verify-data!",
-           "timecut=i",
-           "verbosity=i",
-           "dry-run",
-           "stdin",
-           "help",
-           "oldhack",
-           @{$sw->optSpec},
-           )
+    "dsttop=s",
+    "verify-data!",
+    "timecut=i",
+    "verbosity=i",
+    "nosam",
+    "dry-run",
+    "stdin",
+    "help",
+    "oldhack",
+    @{$sw->optSpec},
+    )
     or die "\nError processing command line options.\n";
 
 if($opt{'help'}) {
@@ -627,14 +624,33 @@ if($opt{'help'}) {
 
 die "What job cluster(s) do you want to process? Try the --help option.\n" if ($#ARGV < 0);
 
-$sw->authConfig();
+if($nosam) {
+    $sw = undef;
+}
+else {
+    $sw->authConfig();
+}
 
-foreach my $dir (@ARGV) {
-    processClusterDir($sw, $dir);
+foreach my $in (@ARGV) {
+    my $dir = abs_path($in);
+    die "Error: can not determine abs_path for $in\n"
+        unless $dir;
+
+    my $dsttop = dsttop($dir);
+    Mu2eClusterDir::iterate($dir, \&iterateCallBack, $sw, $dsttop);
+
+    if(!$dryrun) {
+        my @subdirs = Mu2eClusterDir::getDirEntries($dir);
+        foreach my $d (@subdirs) {
+            rmdir $d; # OK to fail here
+        }
+        rmdir $dir; # OK to fail here
+    }
 }
 
 print "Total time spend talking to SAMWEB server is $totalServerTime seconds\n";
 print "Summary: ", join(', ', (map { " $errorCodes{$_}: $jobStats{$_}" } sort keys %jobStats )), "\n";
+print "WARNING: can not check for global duplicates with --nosam\n" if $nosam;
 print "WARNING: can not check for duplicates with --dry-run\n" if $dryrun;
 
 exit 0;
