@@ -22,6 +22,7 @@ use Class::Struct Mu2eSWIFields =>
       maxtries=>'$',
       read_server=>'$',
       write_server=>'$',
+      timeout=>'$',
     };
 
 use base qw(Mu2eSWIFields);
@@ -33,6 +34,7 @@ sub optSpec {
         "maxtries=i",
         "read-server=s",
         "write-server=s",
+        "timeout=i",
         ];
 }
 
@@ -58,6 +60,7 @@ sub optDocString {
     my $maxtries = $df->maxtries;
     my $read_server = $df->read_server;
     my $write_server = $df->write_server;
+    my $timeout = $df->timeout;
     my $res = <<EOF
 --read-server    Samweb server for querying. The default is
                  $read_server
@@ -77,6 +80,13 @@ sub optDocString {
 --delay=<int>    Delay, in seconds, before retry on the first failure.
                  The default is $delay seconds.
                  The subsequent delays are randomly increased.
+
+--timeout=<int>  A SAMWEB request will be aborted if no activity on the
+
+                 A SAMWEB request will be aborted if no activity on
+                 the connection to the server is observed for
+                 "timeout" seconds.  The default is $timeout.
+
 EOF
 ;
     $res =~ s/^(.+)$/$prefix$1/mg;
@@ -106,9 +116,13 @@ sub new {
         maxtries=>3,
         read_server=>'http://samweb.fnal.gov:8480',
         write_server=>'https://samweb.fnal.gov:8483',
+        timeout => 300,
         );
 
-    $self->{'Mu2eSWI::_ua'} = LWP::UserAgent->new(keep_alive=>1, agent=>_agentID);
+    $self->{'Mu2eSWI::_ua'} = LWP::UserAgent->new(keep_alive=>1,
+                                                  agent=>_agentID,
+                                                  timeout=>$self->timeout,
+        );
     $self->ua->conn_cache->total_capacity(5);
 
     return $self;
