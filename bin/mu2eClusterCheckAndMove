@@ -83,6 +83,7 @@ my %errorCodes = (
 
 # some execution statistics
 my $totalServerTime = 0;
+my $currentJobNumber = 0;
 
 #================================================================
 sub dsttop($) {
@@ -510,7 +511,8 @@ sub processJobDir($$$) {
         last CHECK;
     }
 
-    print +($failed ? "FAILED" : "OK"), ":\t$jobdir\n" if $verbosity;
+    print ++$currentJobNumber, "  ",
+    ($failed ? "FAILED" : "OK"), ":\t$jobdir\n" if $verbosity;
 }
 
 #================================================================
