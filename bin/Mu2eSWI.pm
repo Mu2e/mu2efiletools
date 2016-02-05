@@ -117,7 +117,7 @@ sub new {
         maxtries=>3,
         read_server=>'http://samweb.fnal.gov:8480',
         write_server=>'https://samweb.fnal.gov:8483',
-        timeout => 300,
+        timeout => 3600,
         );
 
     $self->{'Mu2eSWI::_ua'} = LWP::UserAgent->new(keep_alive=>1,
