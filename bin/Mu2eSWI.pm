@@ -105,6 +105,7 @@ sub _agentID() {
 
 sub ua {
     my ($self) = @_;
+    $self->{'Mu2eSWI::_ua'}->timeout($self->timeout);
     return $self->{'Mu2eSWI::_ua'};
 }
 
@@ -123,7 +124,7 @@ sub new {
                                                   agent=>_agentID,
                                                   timeout=>$self->timeout,
         );
-    $self->ua->conn_cache->total_capacity(5);
+    $self->{'Mu2eSWI::_ua'} ->conn_cache->total_capacity(5);
 
     return $self;
 }
