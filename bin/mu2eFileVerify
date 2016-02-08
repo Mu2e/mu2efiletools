@@ -22,7 +22,7 @@ use Data::Dumper;
 use lib dirname($0);
 use Mu2eSWI;
 
-use Class::Struct Mu2eEnstoreInfo => [volume=>'$', location_cookie=>'$'];
+use Class::Struct Mu2eEnstoreInfo => [label=>'$', location_cookie=>'$'];
 
 my $add_location;
 my $redo=0;
@@ -163,24 +163,69 @@ sub default_add_location($) {
 }
 
 #================================================================
+sub queryBFID($) {
+    my ($bfid) = @_;
+
+    my $file_info = `enstore info --bfid $bfid`;
+    die "Error from enstore info for BFID $bfid\n" unless defined $file_info;
+
+    $file_info =~ m/'external_label'\s*:\s*'(.+)'/
+        or die "Error parsing file info: can't extract external_label from:\n$file_info\n";
+    my $label = $1;
+
+    $file_info =~ m/'location_cookie'\s*:\s*'(.+)'/
+        or die "Error parsing file info: can't extract location_cookie from:\n$file_info\n";
+    my $cookie = $1;
+
+    return ( Mu2eEnstoreInfo->new(label=>$label, location_cookie=> $cookie), $file_info );
+}
+
+sub filterLocationCookie($) {
+    my ($fi) = @_;
+    my $cookie = $fi->location_cookie;
+    $cookie =~ s/_//g;
+    $cookie =~ m/^\d+$/ or die "Unexpected format of location_cookie='",
+    $fi->cookie,"' for a non-SFA file.";
+    return Mu2eEnstoreInfo->new(label=>$fi->label, location_cookie=> 0 + $cookie);
+}
+
+my $enstore_checked = 0;
 sub getEnstoreInfo($) {
     my ($pathname) = @_;
-    my $l4fn = dirname($pathname) . '/.(use)(4)(' . basename($pathname) . ')';
 
-    open(my $FH, '<', $l4fn) or return undef; # not on tape yet
+    if(not $enstore_checked) {
+        my $out = `enstore -h`;
+        die "Error running 'enstore' command\n" unless defined $out;
+        $enstore_checked = 1;
+    }
 
-    my $tape = <$FH>;
-    die "Can not get tape label from pnfs layer 4   $l4fn: $! on ".localtime()."\n"
-        unless defined $tape;
-    chomp $tape;
+    my $file_bfid = `enstore pnfs --bfid $pathname 2>/dev/null`;
+    if($? ne 0) {
+        return undef; # the file is not on tape yet.
+    }
+    chomp $file_bfid;
 
-    my $cookie = <$FH>;
-    die "Can not get location cookie from pnfs layer 4   $l4fn: $! on ".localtime()."\n"
-        unless defined $cookie;
-    chomp $cookie;
-    $cookie =~ s/_//g;
+    my ($fi, $file_info) = queryBFID($file_bfid);
 
-    return Mu2eEnstoreInfo->new(volume=>$tape, location_cookie=> 0 + $cookie);
+    # Check for SFA.  Per cs-doc-4698v4 "Enstore Small File Aggregation User Guide"
+    # external_label for a package member will contain ':'
+    if($fi->label =~ /:/) {
+
+        if($file_info =~ m/'package_id'\s*:\s*None/i) {
+            return undef; # not packaged yet
+        }
+
+        $file_info =~ m/'package_id'\s*:\s*'(.+)'/
+            or die "Error parsing file info: can't extract package_id from:\n$file_info\n";
+
+        my $package_bfid = $1;
+
+        my ($pkg, $pkg_info) = queryBFID($package_bfid);
+
+        return filterLocationCookie($pkg);
+    }
+
+    return filterLocationCookie($fi);
 }
 
 #================================================================
@@ -209,7 +254,7 @@ sub makeSamLocation($$) {
     my $dir = dirname($pathname);
 
     if(tapeBacked($pathname)) {
-        return 'enstore:'.$dir.'('.$tapeinfo->location_cookie.'@'.$tapeinfo->volume.')';
+        return 'enstore:'.$dir.'('.$tapeinfo->location_cookie.'@'.$tapeinfo->label.')';
     }
     else {
         return "dcache:".$dir   if $dir =~ m|^/pnfs/mu2e/persistent|;
@@ -294,7 +339,7 @@ sub processFile($$) {
                     print "NO_TAPE_LABEL: $pathname\n";
                 }
                 else {
-                    print "Got enstore info: tape = ",$tapeinfo->volume,
+                    print "Got enstore info: tape = ",$tapeinfo->label,
                     ", cookie = ",$tapeinfo->location_cookie,"\n"
                         if $verbosity > 8;
                 }
