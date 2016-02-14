@@ -31,7 +31,7 @@ sub jobTrackingDataset($$$) {
     return join('.', 'job', $dsowner, $dsconf, $fclds);
 }
 #================================================================
-sub printMissingJobs {
+sub listMissingJobs {
     my $fclds = $opt{'fclds'};
     my $dsowner = $opt{'dsowner'};
     my $dsconf = $opt{'dsconf'};
@@ -46,18 +46,21 @@ sub printMissingJobs {
 
     my $res = $sw->ua->get($url);
     if($res->is_success) {
-        my $istart = 0; # offset into the content buffer
-        my $ieol;
-        while(($ieol = index($res->content, "\n", $istart)) > -1) {
-            my $line = substr($res->content, $istart, $ieol-$istart);
-            $istart = 1+$ieol;
-            chomp $line;
-            print "$line\n";
-        }
+        my @fns = split(/\n/, $res->content);
+        chomp(@fns);
+        return sort @fns;
     }
     else {
         # print Dumper($res),"\n";
         die "Error: ", $res->status_line, ".\n", $res->content,"\n";
+    }
+}
+
+#================================================================
+sub printMissingJobs {
+    my @fns = listMissingJobs();
+    for my $f (@fns) {
+        print "$f\n";
     }
 }
 
