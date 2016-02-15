@@ -7,6 +7,6 @@ Qualifiers=""
 Action=setup
    ProdDir()
    SetupEnv()
-   SetupRequired( mu2efilename v2_1 )
+   SetupRequired( mu2efilename v2_3 )
    SetupRequired( encp -q stken )
    pathPrepend(PATH, ${UPS_PROD_DIR}/bin)

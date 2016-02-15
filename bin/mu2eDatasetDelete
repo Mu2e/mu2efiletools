@@ -1,0 +1,301 @@
+#!/usr/bin/perl -w
+#
+# Delete a Mu2e dataset in SAM and/or in /pnfs
+#
+# A.Gaponenko, 2016
+#
+
+use strict;
+use English '-no_match_vars';
+use Getopt::Long;
+use Digest;
+use LWP::UserAgent;
+use HTTP::Status qw(:constants);
+use File::Basename;
+use File::Path qw(remove_tree);
+use Data::Dumper;
+use Mu2eFilename;
+
+use lib dirname($0);
+use Mu2eSWI;
+
+my $sw = Mu2eSWI->new;
+
+my $verbosity=1;
+my $delete_sam = 0;
+my %target = (tape=>0, disk=>0, scratch=>0);
+
+my %opt = (
+    sam=>\$delete_sam,
+
+    tape=>\$target{'tape'},
+    disk=>\$target{'disk'},
+    scratch=>\$target{'scratch'},
+
+    verbosity=>\$verbosity,
+    help=>0,
+    %{$sw->optDefaults},
+    );
+
+my $proceed = 0;
+
+#================================================================
+sub computeAuthCode {
+    my ($dsname) = @_;
+    my $opstring = "dataset = $dsname, delete_sam = $delete_sam, tgt = @{[%target]}";
+    my $dig = Digest->new('SHA-256');
+    $dig->add($opstring);
+    my $long = $dig->b64digest();
+    return substr($long, 0, 6);
+}
+
+#================================================================
+sub retireFile {
+    my ($sw, $filename, $inopts) = @_;
+
+    my $opts = $inopts // {};
+    my $noRetryCodes = $$opts{'noRetryCodes'} //
+        [ HTTP_CONFLICT, # file already declared
+          HTTP_BAD_REQUEST, # bad metadata, e.g. unknown parent
+        ];
+
+    my $req = HTTP::Request->new(POST => $sw->write_server .'/sam/mu2e/api/files/name/'. $filename .'/retired_date' );
+    # No body in the POST request
+    $req->header('Content-Length'=>0);
+
+    my $numtries = 0;
+    my $delay = $sw->delay;
+
+    while(1) {
+
+        ++$numtries;
+
+        # Pass request to the user agent and get a response back
+        my $res = $sw->ua->request($req);
+
+        # Check the outcome of the response
+        if ($res->is_success) {
+            return $res;
+        }
+        else {
+            my $now_string = localtime();
+
+            for my $code (@$noRetryCodes) {
+                if($code == $res->code) {
+                    die "Error: got server response ",
+                    $res->status_line, ".\n",
+                    $res->content, "\n",
+                    "Stopping on $now_string.";
+                }
+            }
+
+            print STDERR "Got ",$res->status_line," on $now_string\n" if $verbosity > 0;
+            print STDERR "Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 1;
+
+            if($numtries >= $sw->maxtries) {
+                die "Error: $numtries tries failed. Stopping on $now_string due to: ",
+                $res->status_line, ".\n", $res->content,"\n";
+            }
+            else {
+                print STDERR "Will retry in $delay seconds\n" if $verbosity > 0;
+                sleep $delay;
+                $delay += int(rand($delay));
+            }
+        }
+    }
+}
+
+#================================================================
+sub deleteDatasetDefinition($) {
+    my ($dsname) = @_;
+
+    my $req = HTTP::Request->new(POST => $sw->write_server .'/sam/mu2e/api/definitions/name/'. $dsname . '/delete' );
+
+    # No body in the POST request
+    $req->header('Content-Length'=>0);
+
+    # Pass request to the user agent and get a response back
+    my $res = $sw->ua->request($req);
+
+    # Check the outcome of the response
+    if ($res->is_success) {
+        return $res;
+    }
+    else {
+        print STDERR "Dump of the server response:\n", Dumper($res), "\n"
+            if $verbosity > 1;
+
+        die "Error: deleting dataset definition for $dsname:",
+        " stop on ",scalar(localtime())," due to: ",
+        $res->status_line, ".\n", $res->content,"\n";
+    }
+}
+
+#================================================================
+sub deleteDataset($) {
+    my ($dsname) = @_;
+
+    my $dsn = Mu2eDSName->parse($dsname);
+
+    my $have_work = 0;
+
+    for my $t (keys %target) {
+        my $dsdir = $ENV{'MU2E_DSROOT_' . uc($t) } . '/' . $dsn->reldsdir();
+        if(-e $dsdir) {
+            if($target{$t}) {
+                $have_work = 1;
+                print +($proceed ? "Deleting" : "Will delete"), " files in $dsdir\n";
+                if($proceed) {
+                    my $err;
+                    remove_tree($dsdir, {verbose=>$verbosity, error=>\$err});
+                    die "Error: could not delete some files in $dsdir. Stop here.\n" if @$err;
+                }
+            }
+            else {
+                print +($proceed ? "NOT deleting" : "Will NOT delete"),
+                " files in $dsdir\n";
+            }
+        }
+        else {
+            die "Error: request to delete $dsname files from $t, but there is no $dsdir\n"
+                if $target{$t};
+        }
+    }
+
+    if($have_work) {
+        ## FIXME: delete file locations.  Start with a list of files that do have locations.
+        #my @fns = $sw->listFiles("dh.dataset=$dsname");
+    }
+
+    if($delete_sam) {
+        $have_work = 1;
+
+        my @fns = $sw->listFiles("dh.dataset=$dsname with availability anylocation");
+        my $nfiles = scalar(@fns);
+        die "Error: -sam deletion is requested, but there are no SAM records for dataset $dsname. Stop here.\n"
+            unless $nfiles > 0;
+
+        print +($proceed ? "Retiring" : "Will retire"), " $nfiles file records in SAM\n";
+        if($proceed) {
+            my $count = 0;
+            for my $f (@fns) {
+                retireFile($sw, $f);
+                print ++$count,"\tretired file $f\n";
+            }
+        }
+
+        my $dsdef = $sw->describeDatasetDefinition($dsname);
+        if($dsdef->is_success) {
+            print +($proceed ? "Deleting" : "Will delete"), " dataset definition $dsname:\n",
+            $dsdef->content, "\n";
+
+            deleteDatasetDefinition($dsname) if $proceed;
+        }
+        else {
+            print "Error checking dataset definition for $dsname: got server response", Dumper($dsdef)
+                unless ($dsdef->code == HTTP_NOT_FOUND);
+        }
+    }
+
+    if($have_work) {
+        if($proceed) {
+            print "Done\n";
+        }
+        else {
+            my $requiredCode = computeAuthCode($dsname);
+            print "If everything is correct, re-run the same command with --authcode=$requiredCode to proceed.\n";
+        }
+    }
+    else {
+        print "Nothing is to be done\n";
+    }
+}
+
+#================================================================
+sub usage() {
+    my $self = basename($0);
+    return <<EOF
+Usage:
+        $self [options] [--sam] [--disk] [--tape] [--scratch] <dsname>
+
+Delete dataset file tree and/or retire its records in the SAM
+database.
+
+        --sam      Retire SAM records.
+
+                   NOTE: SAM records should only be retired if there
+                   was a mistake and the dataset should not have been
+                   registered in the first place.  In the normal
+                   workflow, data files for "intermediate" datasets
+                   may be removed after merging, however their SAM
+                   records should stay intact.
+
+        --tape     Delete dataset files under $ENV{MU2E_DSROOT_TAPE}
+
+        --disk     Delete dataset files under $ENV{MU2E_DSROOT_DISK}
+
+        --scratch  Delete dataset files under $ENV{MU2E_DSROOT_SCRATCH}
+
+Options:
+
+EOF
+. $sw->optDocString(' 'x8,' 'x5) .
+<<EOF
+
+        --authcode=<string>   Authorization to proceed with the
+                              deletion.  A command invocation without
+                              this option prints what will be done,
+                              shows a code for this operation, and
+                              stops.  If everything is correct, the
+                              command can be repeated with the
+                              --authcode switch to proceed with the
+                              deletion.
+
+        --verbosity=<int>     Verbosity level.  The default is 1.
+
+        --help                Print this message.
+
+EOF
+;
+}
+
+#================================================================
+# Process command line opts.
+GetOptions(\%opt,
+    "sam!",
+    "tape!",
+    "disk!",
+    "scratch!",
+    "authcode=s",
+    "verbosity=i",
+    "help",
+    @{$sw->optSpec},
+    )
+    or die "\nError processing command line options.\n";
+
+if($opt{'help'}) {
+    print usage();
+    exit 0;
+}
+
+die "ERROR: Exactly one dataset name must be specified.  Try the --help option.\n"
+    unless $#ARGV ==  0;
+
+my $dsname = $ARGV[0];
+
+my $authcode = $opt{'authcode'} // '';
+if($authcode ne '') {
+    my $requiredCode = computeAuthCode($dsname);
+
+    die "Error: wrong authcode $authcode\n"
+        unless $authcode eq $requiredCode;
+
+   $proceed = 1;
+   $sw->authConfig();
+}
+
+deleteDataset($dsname);
+
+exit 0;
+
+#================================================================
