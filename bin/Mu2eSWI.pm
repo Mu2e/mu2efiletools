@@ -282,4 +282,13 @@ sub listFiles {
 }
 
 #================================================================
+sub describeDatasetDefinition {
+    my ($self, $dsname) = @_;
+    my $url = URI->new( $self->read_server.'/sam/mu2e/api/definitions/name/'.$dsname.'/describe' );
+    $url->query_form( 'format' => 'plain' );
+    my $res = $self->ua->get($url);
+    return $res;
+}
+
+#================================================================
 1;
