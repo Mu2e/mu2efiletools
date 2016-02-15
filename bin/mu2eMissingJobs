@@ -30,35 +30,18 @@ sub jobTrackingDataset($$$) {
     my ($fclds, $dsowner, $dsconf) = @_;
     return join('.', 'job', $dsowner, $dsconf, $fclds);
 }
+
 #================================================================
-sub listMissingJobs {
+sub printMissingJobs {
     my $fclds = $opt{'fclds'};
     my $dsowner = $opt{'dsowner'};
     my $dsconf = $opt{'dsconf'};
 
     my $jobds = jobTrackingDataset($fclds, $dsowner, $dsconf);
 
-    my $url = URI->new( $sw->read_server.'/sam/mu2e/api/files/list' );
-    $url->query_form(
-        'format' => 'plain',
-        'dims' => "dh.dataset=$fclds minus (isparentof: (dh.dataset=$jobds)) with availability anylocation",
-        );
+    my $query = "dh.dataset=$fclds minus (isparentof: (dh.dataset=$jobds)) with availability anylocation";
 
-    my $res = $sw->ua->get($url);
-    if($res->is_success) {
-        my @fns = split(/\n/, $res->content);
-        chomp(@fns);
-        return sort @fns;
-    }
-    else {
-        # print Dumper($res),"\n";
-        die "Error: ", $res->status_line, ".\n", $res->content,"\n";
-    }
-}
-
-#================================================================
-sub printMissingJobs {
-    my @fns = listMissingJobs();
+    my @fns = $sw->listFiles($query);
     for my $f (@fns) {
         print "$f\n";
     }

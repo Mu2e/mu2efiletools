@@ -254,4 +254,32 @@ sub declareFile {
 }
 
 #================================================================
+sub listFiles {
+    my ($self, $samquery, $inopts) = @_;
+    my $opts = $inopts // {};
+    my $verbosity = $$opts{'verbosity'} // 1;
+
+    my $url = URI->new( $self->read_server.'/sam/mu2e/api/files/list' );
+    $url->query_form( 'format' => 'plain', 'dims' => $samquery );
+
+    my $res = $self->ua->get($url);
+    if($res->is_success) {
+        my @fns = split(/\n/, $res->content);
+        chomp(@fns);
+        return sort @fns;
+    }
+    else {
+        print STDERR "Dump of the server response:\n", Dumper($res),"\n\n"
+            if $verbosity > 1;
+
+        croak "Error: got server response ",
+        $res->status_line, ".\n",
+        $res->content, "\n",
+        "Stopping on ",
+        scalar(localtime()),
+        ".\n";
+    }
+}
+
+#================================================================
 1;
