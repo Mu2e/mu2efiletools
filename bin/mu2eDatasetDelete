@@ -192,7 +192,7 @@ sub deleteDataset($) {
             deleteDatasetDefinition($dsname) if $proceed;
         }
         else {
-            print "Error checking dataset definition for $dsname: got server response", Dumper($dsdef)
+            die "Error checking dataset definition for $dsname: got server response", Dumper($dsdef)
                 unless ($dsdef->code == HTTP_NOT_FOUND);
         }
     }
