@@ -13,7 +13,9 @@ use Carp;
 use File::Basename;
 use LWP::UserAgent;
 use HTTP::Request;
+use HTTP::Request::Common;
 use HTTP::Status qw(:constants);
+use JSON;
 use Time::HiRes qw(gettimeofday tv_interval);
 use Data::Dumper;
 
@@ -191,6 +193,8 @@ sub declareFile {
           HTTP_BAD_REQUEST, # bad metadata, e.g. unknown parent
         ];
 
+    $self->ensureDatasetDefinition($jstext, $inopts);
+
     # Create a request
     my $req = HTTP::Request->new(POST => $self->write_server . '/sam/mu2e/api/files');
     $req->content_type('application/json');
@@ -288,6 +292,54 @@ sub describeDatasetDefinition {
     $url->query_form( 'format' => 'plain' );
     my $res = $self->ua->get($url);
     return $res;
+}
+
+#================================================================
+my %knownDatasets;
+sub ensureDatasetDefinition {
+    my ($self, $jstext, $inopts) = @_;
+    my $opts = $inopts // {};
+    my $verbosity = $$opts{'verbosity'} // 1;
+
+    my $jsp = from_json($jstext);
+
+    my $dsname = $jsp->{'dh.dataset'} // '';
+
+    return if $dsname eq '';
+
+    return if $knownDatasets{$dsname}//0;
+
+    # does SAM already know about this dataset?
+    my $dsdef = $self->describeDatasetDefinition($dsname);
+    if($dsdef->is_success) {
+        $knownDatasets{$dsname} = 1;
+        return;
+    }
+
+    die "Error checking dataset definition for $dsname: got server response", Dumper($dsdef), "\n"
+        unless ($dsdef->code == HTTP_NOT_FOUND);
+
+    print "Creating a dataset definition for $dsname\n"
+        if $verbosity > 0;
+
+    # We need to create a definition for $dsname
+    my $res = $self->ua->request(
+        POST $self->write_server.'/sam/mu2e/api/definitions/create',
+        Content => {
+            'name' => $dsname,
+            'dims'=>"dh.dataset=$dsname",
+            'group'=>'mu2e',
+        });
+
+    die "Error creating dataset definition for $dsname: ",
+    $res->status_line, ".\n",
+    $res->content, "\n",
+    "Stopping on ",
+    scalar(localtime()),
+    ".\n"
+        unless $res->is_success;
+
+    $knownDatasets{$dsname} = 1;
 }
 
 #================================================================
