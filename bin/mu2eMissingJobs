@@ -15,6 +15,7 @@ use URI;
 use Data::Dumper;
 use File::Basename;
 use Mu2eFilename;
+use Mu2eDSName;
 
 use lib dirname($0);
 use Mu2eSWI;
@@ -93,12 +94,24 @@ if($opt{'help'}) {
     exit 0;
 }
 
+die "Error: bad setup: no MU2E_DSROOT_DISK.\n" unless defined $ENV{'MU2E_DSROOT_DISK'};
+
 die "ERROR: Got non-option command line parameters.  Try the --help option.\n"
     unless $#ARGV ==  -1;
 
 # Check that all of the required args are present:
 foreach my $k ('fclds', 'dsowner', 'dsconf') {
     defined $opt{$k} or die "Error: --$k must be specified.  Try the --help option.\n";
+}
+
+# Check that fcl ds is in the standard location
+if($opt{'pathname'}) {
+    my $fclds = $opt{'fclds'};
+    my $dsdir = $ENV{'MU2E_DSROOT_DISK'} . '/' . Mu2eDSName->parse($fclds)->reldsdir();
+    die "Error: fcl dataset $fclds is not found in the standard location $dsdir\n"
+       ."You can rerun with the --nopathname option to get a list of fcl files"
+       ." without their pathnames for your query.\n"
+    unless -d $dsdir;
 }
 
 printMissingJobs();
