@@ -368,6 +368,8 @@ $sw->authConfig();
 my @fl = $sw->listFiles("dh.dataset=$dsname with availability virtual");
 
 if(scalar(@fl) > 0) {
+    print "Will check ",scalar(@fl)," files.\n";
+
     for my $file (@fl) {
         my $fn = Mu2eFilename->parse($file);
         my $pathname = $pathFormatter->($fn);
