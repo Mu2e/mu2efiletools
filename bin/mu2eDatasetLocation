@@ -346,6 +346,8 @@ if($opt{'help'}) {
     exit 0;
 }
 
+die "Error: bad setup: no MU2E_DSROOT_TAPE.\n" unless defined $ENV{'MU2E_DSROOT_TAPE'};
+
 die "ERROR: Exactly one dataset name must be specified.  Try the --help option.\n"
     unless $#ARGV ==  0;
 

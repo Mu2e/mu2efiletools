@@ -278,6 +278,12 @@ if($opt{'help'}) {
     exit 0;
 }
 
+for my $t (keys %target) {
+    my $var = 'MU2E_DSROOT_' . uc($t);
+    die "Error: bad setup: no $var\n" unless defined $ENV{$var};
+}
+
+
 die "ERROR: Exactly one dataset name must be specified.  Try the --help option.\n"
     unless $#ARGV ==  0;
 
