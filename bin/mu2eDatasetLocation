@@ -25,7 +25,7 @@ use Mu2eSWI;
 
 use Class::Struct Mu2eEnstoreInfo => [label=>'$', location_cookie=>'$'];
 
-my $add_target;
+my $add_target='';
 my $dryrun = 0;
 my $verbosity=3;
 my $sw = Mu2eSWI->new;
