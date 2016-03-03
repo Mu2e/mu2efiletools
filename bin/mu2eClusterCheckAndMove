@@ -27,7 +27,7 @@ use Mu2eSWI;
 use Mu2eClusterDir;
 
 # the fields correspond to metadata parameters of Mu2e job tracking entries in SAM.
-use Class::Struct Mu2eJobStats => [ cpu=>'$', maxres=>'$', node=>'$', site=>'$' ];
+use Class::Struct Mu2eJobStats => [ cpu=>'$', maxres=>'$', node=>'$', site=>'$', disk=>'$' ];
 
 use Class::Struct Mu2eLogFileInfo => [
     manifest_selfhash=>'$',
@@ -189,6 +189,10 @@ sub processLogFile($) {
             if($line =~ m/^([\d\.]+)user *([\d\.]+)system .*elapsed.* (\d+)maxresident/) {
                 $job_stats->cpu($1 + $2);
                 $job_stats->maxres($3);
+            }
+
+            if($line =~ m/^mu2eprodsys\s*diskUse\s*=\s*(\d+)\s/) {
+                $job_stats->disk($1);
             }
 
             if($line =~ m/^Starting *on *host *Linux *([^\s]+)\s/) {
@@ -361,21 +365,26 @@ sub isGlobalDup($$$) {
 
     my $st = $loginfo->job_stats;
 
-    my $json_text = to_json(
-        { data_tier => 'job',
-          file_name => $jtfn,
-          file_size => 0,
-          file_type => 'other',
-          parents => [ $parentfn ],
-          'dh.configuration' => $lf->configuration,
-          'dh.owner' => $lf->owner,
-          'dh.sequencer' => $lf->sequencer,
-          'dh.dataset' => $jtds,
-          'job.cpu' => int(0.5+$st->cpu),
-          'job.maxres' => $st->maxres,
-          'job.node' => $st->node,
-          'job.site' => $st->site,
-        });
+    my $jsstruct = { data_tier => 'job',
+                     file_name => $jtfn,
+                     file_size => 0,
+                     file_type => 'other',
+                     parents => [ $parentfn ],
+                     'dh.configuration' => $lf->configuration,
+                     'dh.owner' => $lf->owner,
+                     'dh.sequencer' => $lf->sequencer,
+                     'dh.dataset' => $jtds,
+                     'job.cpu' => int(0.5+$st->cpu),
+                     'job.maxres' => $st->maxres,
+                     'job.node' => $st->node,
+                     'job.site' => $st->site,
+    };
+
+    if(defined $st->disk) {
+        $$jsstruct{'job.disk'} = $st->disk;
+    }
+
+    my $json_text = to_json($jsstruct);
 
     print "\t", ($dryrun ? "Would" : "About to"), " post json = $json_text\n" if $verbosity > 1;
 
