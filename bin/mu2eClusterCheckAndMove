@@ -394,7 +394,7 @@ sub isGlobalDup($$$) {
 
     print "\t", ($dryrun ? "Would" : "About to"), " post json = $json_text\n" if $verbosity > 1;
 
-    my $duplicate = 0;
+    my $duplicate = 1;
 
     if(!$dryrun) {
         my $res = $sw->declareFile($json_text,
@@ -403,7 +403,22 @@ sub isGlobalDup($$$) {
                                      allowedFailCodes => [ HTTP_CONFLICT ]
                                    });
 
-        $duplicate = not $res->is_success;
+        if($res->is_success) {
+            $duplicate = 0;
+        }
+        else {
+            # Does the SAM record correspond to some other job
+            # instance, or was it created for our instance but a
+            # previous mu2eClusterCheckAndMove process died before
+            # completing the directory move?
+            my $samsha = $sw->getSamSha($jtfn);
+            if($samsha eq $loginfo->manifest_selfhash) {
+                print "Duplicate check: existing SAM record corresponds to the current job.  Accepting $logFileName\n"
+                    if $verbosity > 0;
+
+                $duplicate = 0;
+            }
+        }
     }
 
     return $duplicate;
