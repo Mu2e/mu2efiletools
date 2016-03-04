@@ -23,19 +23,21 @@ my $sw = Mu2eSWI->new;
 
 my $verbosity=1;
 my $delete_sam = 0;
-my %target = (tape=>0, disk=>0, scratch=>0);
 
+my %target = ();
 my %opt = (
     sam=>\$delete_sam,
-
-    tape=>\$target{'tape'},
-    disk=>\$target{'disk'},
-    scratch=>\$target{'scratch'},
 
     verbosity=>\$verbosity,
     help=>0,
     %{$sw->optDefaults},
     );
+
+foreach my $loc (Mu2eFNBase::standard_locations()) {
+    $target{$loc} = 0;
+    $opt{$loc} = \$target{$loc};
+}
+
 
 my $proceed = 0;
 
@@ -140,7 +142,7 @@ sub deleteDataset($) {
     my $have_work = 0;
 
     for my $t (keys %target) {
-        my $dsdir = $ENV{'MU2E_DSROOT_' . uc($t) } . '/' . $dsn->reldsdir();
+        my $dsdir = $dsn->absdsdir($t);
         if(-e $dsdir) {
             if($target{$t}) {
                 $have_work = 1;
@@ -214,6 +216,16 @@ sub deleteDataset($) {
 #================================================================
 sub usage() {
     my $self = basename($0);
+
+    my $locations = '';
+    foreach my $loc (Mu2eFNBase::standard_locations()) {
+        $locations .= ' 'x8
+            . sprintf("--%-8s", $loc)
+            . " Delete dataset files under "
+            . Mu2eFNBase::location_root($loc)
+            . "\n\n";
+    }
+
     return <<EOF
 Usage:
         $self [options] [--sam] [--disk] [--tape] [--scratch] <dsname>
@@ -227,21 +239,15 @@ database.
                    was a mistake and the dataset should not have been
                    registered in the first place.  In the normal
                    workflow, data files for "intermediate" datasets
-                   may be removed after merging, however their SAM
+                   are removed after merging, however their SAM
                    records should stay intact.
 
-        --tape     Delete dataset files under $ENV{MU2E_DSROOT_TAPE}
-
-        --disk     Delete dataset files under $ENV{MU2E_DSROOT_DISK}
-
-        --scratch  Delete dataset files under $ENV{MU2E_DSROOT_SCRATCH}
-
+$locations
 Options:
 
 EOF
 . $sw->optDocString(' 'x8,' 'x5) .
 <<EOF
-
         --authcode=<string>   Authorization to proceed with the
                               deletion.  A command invocation without
                               this option prints what will be done,
@@ -263,9 +269,7 @@ EOF
 # Process command line opts.
 GetOptions(\%opt,
     "sam!",
-    "tape!",
-    "disk!",
-    "scratch!",
+    Mu2eFNBase::standard_locations(),
     "authcode=s",
     "verbosity=i",
     "help",
@@ -277,12 +281,6 @@ if($opt{'help'}) {
     print usage();
     exit 0;
 }
-
-for my $t (keys %target) {
-    my $var = 'MU2E_DSROOT_' . uc($t);
-    die "Error: bad setup: no $var\n" unless defined $ENV{$var};
-}
-
 
 die "ERROR: Exactly one dataset name must be specified.  Try the --help option.\n"
     unless $#ARGV ==  0;
