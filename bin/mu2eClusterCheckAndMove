@@ -374,6 +374,12 @@ sub isGlobalDup($$$) {
                      'dh.owner' => $lf->owner,
                      'dh.sequencer' => $lf->sequencer,
                      'dh.dataset' => $jtds,
+
+                     # Use this a (statistically) unique identifier
+                     # of the job.   Needed to figure out which of several
+                     # potential grid re-runs this record corresponds to.
+                     'dh.sha256' => $loginfo->manifest_selfhash,
+
                      'job.cpu' => int(0.5+$st->cpu),
                      'job.maxres' => $st->maxres,
                      'job.node' => $st->node,
