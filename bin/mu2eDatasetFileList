@@ -1,0 +1,160 @@
+#!/usr/bin/perl -w
+#
+# Lists files in a Mu2e dataset.
+#
+# A.Gaponenko, 2016
+#
+
+use strict;
+use English '-no_match_vars';
+use Getopt::Long;
+use Digest;
+use LWP::UserAgent;
+use HTTP::Status qw(:constants);
+use File::Basename;
+use File::Path qw(remove_tree);
+use Data::Dumper;
+use Mu2eFilename;
+use Mu2eFNBase;
+
+use lib dirname($0);
+use Mu2eSWI;
+
+my $sw = Mu2eSWI->new;
+my %opt = ( help=>0, basename=>0, %{$sw->optDefaults} );
+
+my @stdloc = Mu2eFNBase::standard_locations();
+
+#================================================================
+sub usage() {
+    my $self = basename($0);
+    return <<EOF
+Usage:
+        $self [options] <dsname>
+
+Print out a sorted list of files in a Mu2e dataset.
+Options:
+
+        --basename           Print file basenames instead of
+                             absolute /pnfs pathnames.
+
+        --disk
+        --tape
+        --scratch            Print pathnames of files in the given
+                             location.  But default the script tries
+                             to figure out the location automatically.
+                             If that fails, you will be asked to specify
+                             a location.
+
+EOF
+.
+# this is too much: . $sw->optDocString(' 'x8,' 'x5) .
+<<EOF
+
+        --help                Print this message.
+
+EOF
+;
+}
+
+#================================================================
+# Process command line opts.
+GetOptions(\%opt,
+    "help",
+    "basename",
+    @stdloc,
+    @{$sw->optSpec}, )
+    or die "\nError processing command line options.\n";
+
+if($opt{'help'}) {
+    print usage();
+    exit 0;
+}
+
+die "ERROR: Exactly one dataset name must be specified.  Try the --help option.\n"
+    unless $#ARGV ==  0;
+
+my $dsname = $ARGV[0];
+
+
+# check option consistency
+my @usedopts = ();
+foreach my $loc ('basename', @stdloc) {
+    push @usedopts, $loc if $opt{$loc}//0;
+}
+if(scalar(@usedopts) > 1) {
+    die "Error: inconsistent options: ",
+    join(', ', map( '--'.$_ , @usedopts)),
+    "\n";
+}
+
+my $fileloc;
+if(!$opt{'basename'} and (scalar(@usedopts) == 1)) {
+    # the user claims to know where the files are
+    # we can quickly (without querying SAM) check
+    # if that is correct.
+    my $ds = Mu2eDSName->parse($dsname);
+    $fileloc = $usedopts[0];
+    my $dir = $ds->absdsdir($fileloc);
+    die "Error: dataset $dsname is not present in the specified location '$fileloc'\n"
+        unless -d $dir;
+}
+
+my @fns = $sw->listFiles("dh.dataset=$dsname with availability anylocation");
+
+if(scalar(@fns) > 0) {
+    if($opt{'basename'}) {
+        for my $f (@fns) {
+            print "$f\n";
+        }
+    }
+    else {
+        my $ds = Mu2eDSName->parse($dsname);
+
+        if(not defined $fileloc) {
+            # Figure out what location to print
+
+            my @found;
+            foreach my $loc (@stdloc) {
+                my $dir = $ds->absdsdir($loc);
+                if(-d $dir) {
+                    push @found, $loc;
+                }
+            }
+
+            if(scalar(@found) == 1) {
+                # all is clear, there is an unambiguous thing to do
+                $fileloc = $found[0];
+            }
+            elsif(scalar(@found) > 1)  {
+                my $msg = "Dataset $dsname seems to exist in multiple locations: ".
+                    join(", ",@found).
+                    ".  Please use a command line option to specify which one to use.\n";
+                die $msg;
+            }
+            else {
+                # We did not find the files.  This is either a virtual dataset, or
+                # one uploaded throught the old workflow via FTS.
+                my $msg = "Dataset $dsname does not exist in any of the standard locations " .
+                    join(", ",@stdloc).
+                    ".  You can use the --basename option to print out just SAM filenames.\n".
+                    "If this is an 'old' dataset uploaded via FTS, you can try 'setup dhtools; samToPnfs $dsname' to get a list of files.\n"
+                    ;
+                die $msg;
+            }
+        }
+
+        my $locroot = $ds->location_root($fileloc);
+        for my $f (@fns) {
+            print  $locroot . '/' . Mu2eFilename->parse($f)->relpathname() . "\n";
+        }
+    }
+}
+else {
+    print STDERR "No files with dh.dataset=$dsname are registered in SAM.\n";
+    exit 1;
+}
+
+exit 0;
+
+#================================================================
