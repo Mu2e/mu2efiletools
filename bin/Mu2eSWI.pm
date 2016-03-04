@@ -83,9 +83,7 @@ sub optDocString {
                  The default is $delay seconds.
                  The subsequent delays are randomly increased.
 
---timeout=<int>  A SAMWEB request will be aborted if no activity on the
-
-                 A SAMWEB request will be aborted if no activity on
+--timeout=<int>  A SAMWEB request will be aborted if no activity on
                  the connection to the server is observed for
                  "timeout" seconds.  The default is $timeout.
 
