@@ -97,7 +97,7 @@ sub getSamSha($$) {
 
 #================================================================
 sub tapeBacked($) {
-    return $_[0] =~ /$ENV{MU2E_DSROOT_TAPE}/;
+    return $add_target =~ /tape/;
 }
 
 #================================================================
@@ -298,9 +298,10 @@ sub processFile($$) {
 #================================================================
 sub usage() {
     my $self = basename($0);
+    my $dstopts = join('|', Mu2eFNBase::standard_locations());
     return <<EOF
 Usage:
-        $self [options] --add={tape|disk|scratch} <DatasetName>
+        $self [options] --add={$dstopts} <DatasetName>
 
 This command operates on a subset of SAM records in the given dataset
 that do not have their location defined.  If the standard Mu2e tape
@@ -346,24 +347,17 @@ if($opt{'help'}) {
     exit 0;
 }
 
-die "Error: bad setup: no MU2E_DSROOT_TAPE.\n" unless defined $ENV{'MU2E_DSROOT_TAPE'};
-
 die "ERROR: Exactly one dataset name must be specified.  Try the --help option.\n"
     unless $#ARGV ==  0;
 
 my $dsname = $ARGV[0];
 
 die "ERROR: --add parameter must be specified\n" if($add_target eq '');
-my $pathFormatter;
-if($add_target eq 'tape') {
-    $pathFormatter = \&Mu2eFilename::abspathname_tape;
-} elsif($add_target eq 'disk') {
-    $pathFormatter = \&Mu2eFilename::abspathname_disk;
-} elsif($add_target eq 'scratch') {
-    $pathFormatter = \&Mu2eFilename::abspathname_scratch;
-} else {
-    die "ERROR: unknonw --add location '$add_target'\n";
+my $known = 0;
+foreach my $loc (Mu2eFNBase::standard_locations()) {
+    $known = 1 if $loc eq $add_target;
 }
+die "Unknown dataset location '$add_target'\n" unless $known;
 
 $sw->authConfig();
 
@@ -374,7 +368,7 @@ if(scalar(@fl) > 0) {
 
     for my $file (@fl) {
         my $fn = Mu2eFilename->parse($file);
-        my $pathname = $pathFormatter->($fn);
+        my $pathname = $fn->abspathname($add_target);
         processFile($sw, $pathname);
     }
 
