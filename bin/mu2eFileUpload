@@ -1,9 +1,8 @@
 #!/usr/bin/perl -w
 #
-# Copies given files to their standard location.
-# Files that already exist at the destination are skipped.
+# Moves given files to their standard location.
 #
-# A.Gaponenko, 2015
+# A.Gaponenko, 2015, 2016
 #
 
 use strict;
@@ -31,7 +30,6 @@ my %opt = ( copy=>\$forcecopy, verbosity=>\$verbosity, 'dry-run'=>\$dryrun, help
 # stat counters for the processing
 my $numCopied = 0;
 my $numMoved = 0;
-my $numSkipped = 0;
 
 my $totalCopiedBytes = 0;
 my $totalCopyTime = 0;
@@ -61,8 +59,7 @@ sub processFile($) {
     die "Internal error: unknown dstarea\n" unless defined $stdpath;
 
     if(-e $stdpath) {
-        ++$numSkipped;
-        print +($numCopied+$numMoved+$numSkipped)." Skipped file $infile\n" if $verbosity > 1;
+        die "Request to upload $infile, but $stdpath already exists.\n";
     }
     else {
 
@@ -77,7 +74,7 @@ sub processFile($) {
         if($copy)  {
             my $st = stat($infile) or die "Error stating $infile: $! on ".localtime()."\n";
 
-            print +($numCopied+$numMoved+$numSkipped) , ($dryrun ? "  Would start" : "  Starting"),
+            print +($numCopied+$numMoved) , ($dryrun ? "  Would start" : "  Starting"),
             " to transfer ", $st->size, " bytes in $infile to $stdpath on $now_string\n"
                 if $verbosity > 0;
 
@@ -97,12 +94,17 @@ sub processFile($) {
 
                 $totalCopiedBytes += $st->size;
                 $totalCopyTime += $elapsed;
+
+                if(!$dryrun and !$forcecopy) {
+                    unlink $infile
+                        or die "Error deleting $infile: $!\n";
+                }
             }
 
             ++$numCopied;
         }
         else {
-            print +($numCopied+$numMoved+$numSkipped), ($dryrun ? " Would move" : " Moving"), " $infile to $stdpath on $now_string\n"
+            print +($numCopied+$numMoved), ($dryrun ? " Would move" : " Moving"), " $infile to $stdpath on $now_string\n"
                 if $verbosity > 0;
 
             if(!$dryrun) {
@@ -129,19 +131,20 @@ sub usage() {
 Usage:
         $self {--tape|--disk|--scratch} [options]
 
-Will read file names on stdin and try to copy each file to its
-standard location.  One of the --tape, --disk, or --scratch choices
-must be made.  Files that already exist at the destination will be
-skipped.  A report on the number of skipped and copied files is
+Will read file names on stdin and try to move each file to its
+standard location.
+
+One of the --tape, --disk, or --scratch choices
+must be made.  A report on the number of skipped and copied files is
 printed at the end.
 
 The supported options are
 
     --copy                Always copy the files and leave originals in place.
                           By default the script will move files to the destination
-                          if possible. (E.g. files already in /pnfs/mu2e/scratch
-                          can be moved to the --scratch destination area.)
-                          For the --tape destination the files are always copied.
+                          by either renaming (if possible), or copying and deleting
+                          the original.  The --copy option forces to alway
+                          copy the files and leave the originals in place.
 
     --verbosity=<int>     Verbosity level.  The default is 1.
 
@@ -196,7 +199,7 @@ while(my $line = <STDIN>) {
 }
 my $totalElapsed = tv_interval($tScriptStart);
 
-print "Summary: copied $numCopied and moved $numMoved files in $totalElapsed seconds. Skipped $numSkipped files.\n";
+print "Summary: copied $numCopied and moved $numMoved files in $totalElapsed seconds.\n";
 if($totalCopyTime > 0.1) {
     my $sz = pretty_print_bytes($totalCopiedBytes);
     my $throughput = sprintf "%.2f MiB/s", $totalCopiedBytes/1024./1024./$totalCopyTime;
