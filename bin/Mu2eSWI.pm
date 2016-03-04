@@ -341,4 +341,59 @@ sub ensureDatasetDefinition {
 }
 
 #================================================================
+sub getSamSha($$) {
+    my ($self,$filename, $inopts) = @_;
+
+    my $opts = $inopts // {};
+    my $verbosity = $$opts{'verbosity'} // 1;
+    my $timing = $$opts{'metadataQueryTime'};
+
+    # Get sha256 from file metadata
+    my $req = HTTP::Request->new(GET => $self->read_server.'/sam/mu2e/api/files/name/'.$filename.'/metadata?format=json');
+
+    my $numtries = 0;
+    my $delay = $self->delay;
+    while(1) {
+        ++$numtries;
+
+        # Measure the timing
+        my $t1 = $timing ? [gettimeofday()] : undef;
+
+        my $res = $self->ua->request($req);
+
+        if($timing) {
+            my $elapsed = tv_interval($t1);
+            $$timing += $elapsed;
+        }
+
+        if ($res->is_success) {
+            my $jstext = $res->content;
+            print "got json = $jstext\n" if $verbosity > 8;
+            my $js = from_json($jstext);
+
+            my $jssha = ${$js}{'dh.sha256'};
+            my $now_string = localtime();
+            die "Error: no dh.sha256 SAM record for file $filename on $now_string\n" unless defined $jssha;
+            return $jssha;
+        }
+        else {
+            my $now_string = localtime();
+            print STDERR "Error querying metadata for file $filename: ",$res->status_line," on $now_string\n" if $verbosity > 0;
+            print STDERR "Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 8;
+            if($numtries >= $self->maxtries) {
+                die "Error: $numtries tries failed. Stopping on $now_string due to: ",
+                $res->status_line, ".\n", $res->content,"\n";
+            }
+            else {
+                print STDERR "Will retry in $delay seconds\n" if $verbosity > 0;
+                sleep $delay;
+                $delay += int(rand($delay));
+            }
+        }
+    }
+}
+
+
+
+#================================================================
 1;
