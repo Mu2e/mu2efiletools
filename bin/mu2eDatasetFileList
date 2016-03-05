@@ -51,7 +51,7 @@ EOF
 # this is too much: . $sw->optDocString(' 'x8,' 'x5) .
 <<EOF
 
-        --help                Print this message.
+        --help               Print this message.
 
 EOF
 ;
