@@ -32,7 +32,7 @@ sub getDirEntries($) {
     croak "Error in readdir($dirname): $! on ".localtime()."\n" if $!;
     closedir($CLD0) or croak "Can't closedir($dirname): $! on ".localtime()."\n";
 
-    return @list0;
+    return grep { ($_ ne '.') and ($_ ne '..') } @list0;
 }
 
 #================================================================
