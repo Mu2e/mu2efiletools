@@ -1,0 +1,388 @@
+#!/usr/bin/perl -w
+#
+# This script tars up, copies to tape, and registers in SAM files that
+# are left over in a grid cluster output dir structure after datasets
+# that are meant to be individually uploaded have been processed and
+# their files are gone from the structure.
+#
+# There are several steps in the processing:
+#
+# 1) Move top level cluster directory into a randomly generated
+#    temporary location.  This prevents a race between this script
+#    scanning cluster dir structure and mu2eClusterCheckAndMove
+#    adding new jobs to the same directory tree.
+#
+# 2) Scan the directory tree.  If an unexpected file is found, or a
+#    required log file is not found in a job subdirectory, we stop and
+#    let user resolve the problem.  Parent fcl file names are
+#    extracted from log files during this step.
+#
+# 3) Run a "tar" command to archive directory contents.
+#
+# 4) Create json and register the tar file in SAM.
+#
+# A.Gaponenko, 2015
+#
+
+use strict;
+use English '-no_match_vars';
+use File::Basename;
+use File::Path;
+use File::Temp;
+use Cwd 'abs_path';
+use Getopt::Long;
+use Digest;
+use JSON;
+use HTTP::Status qw(:constants);
+use Data::Dumper;
+use Mu2eFilename;
+
+use lib dirname($0);
+use Mu2eSWI;
+use Mu2eClusterDir;
+
+use Class::Struct Mu2eClusterSummary => [ logdsname=>'$', minseq => '$', parents => '$' ];
+
+my $finalArchiveLocation = 'tape';
+
+my @allowed = ();
+my $parents = 1;
+my $verbosity=2;
+my $dryrun=0;
+my $sw = Mu2eSWI->new;
+my %opt = (
+    allow => \@allowed,
+    parents => \$parents,
+    verbosity=>\$verbosity,
+    'dry-run'=>\$dryrun,
+    help=>0,
+    %{$sw->optDefaults},
+    );
+
+my %whitelist; # information from @allowed in a different format
+
+#================================================================
+# Moves clusterdir to a random subdirectory in "archiving/"
+# and returns path to clusterdir in its new location.
+
+sub move_clusterdir($) {
+    my ($clusterdir) = @_;
+
+    die "Can not determine an 'archiving/' dir for cluster $clusterdir."
+        ." This script is intended to be used on mu2eprodsys outputs"
+        ." in the 'good/' subdirectory of the workflow directory structure.\n"
+        unless $clusterdir =~ m'^(.*)/workflow/([^/]+)/good/([^/]+)$';
+
+    my ($prefix, $project, $cluster) = ($1, $2, $3);
+
+    my $arcdir = "$prefix/workflow/$project/archiving";
+
+    my $dst = $clusterdir;
+
+    if(!$dryrun) {
+        mkdir $arcdir unless -d $arcdir;  # let mkdir fail here on races
+
+        my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime();
+        $year = sprintf("%02d", $year+1900);
+        $mon = sprintf("%02d", $mon+1);
+        $mday = sprintf("%02d", $mday);
+        $hour = sprintf("%02d", $hour);
+        $min = sprintf("%02d", $min);
+
+        my $tmptop = File::Temp::tempdir($arcdir . "/${year}${mon}${mday}-${hour}${min}-XXXX");
+
+        $dst = $tmptop . '/' . basename($clusterdir);
+        rename($clusterdir, $dst) or die "Error renaming $clusterdir to $dst: $!\n";
+    }
+
+    return $dst;
+}
+
+#================================================================
+sub getLogFileName($) {
+    my ($jobdir) = @_;
+    my @list = glob "$jobdir/*.log";
+    return ($#list == 0) ? $list[0] : "";
+}
+
+#================================================================
+sub extractJobParent($) {
+    my ($logFileName) = @_;
+
+    my $parent_fcl;
+
+    my $parentRE =  $opt{'oldhack'} ?
+        '^origFCL *= *(.*)$' :
+        '^mu2eprodsys *origFCL *= *(.*)$';
+
+    open(my $logfh, $logFileName) or die "Error opening $logFileName: $!\n";
+
+  LINE:
+    while(my $line = <$logfh>) {
+        if($line =~ /^mu2eprodsys *origFCL *= *(.*)$/) {
+            $parent_fcl = $1;
+            last LINE;
+        }
+
+        # a hack to get information from old log files
+        if($line =~ /^origFCL *= *(.*)$/) {
+            $parent_fcl = $1;
+        }
+    }
+
+    return basename($parent_fcl);
+}
+
+#================================================================
+# The order of args is fixed by Mu2eClusterDir::iterate
+sub scanJobDir {
+    my ($jobdir, $sum) = @_;
+
+    print "\t",scalar(localtime()) . "  Scanning $jobdir\n" if $verbosity > 2;
+
+    my $logFileName = getLogFileName($jobdir);
+    die "No unique log file name in $jobdir\n" if($logFileName eq '');
+    my $lf = Mu2eFilename->parse(basename($logFileName));
+
+    my $logdsname = $lf->dataset->dsname;
+
+    if(defined $sum->logdsname) {
+        die "Error: inconsistent log file name $logFileName: expect logdsname = "
+            . $sum->logdsname
+            unless $logdsname eq $sum->logdsname;
+
+        if(($lf->sequencer cmp $sum->minseq)<0) {
+            $sum->minseq($lf->sequencer);
+        }
+    }
+    else {
+        $sum->logdsname($logdsname);
+        $sum->minseq($lf->sequencer);
+    }
+
+    # check that all files in the directory are whitelisted
+    my @filelist = Mu2eClusterDir::getDirEntries($jobdir);
+    foreach my $f (@filelist) {
+        my $short = $f;
+        $short =~ s/\.json$//;
+        next if $short =~ /\.log$/;
+
+        my $fn = Mu2eFilename->parse($short);
+        die "Error: file $jobdir/$f does not belong to a white-listed dataset.\n"
+            unless defined $whitelist{$fn->dataset->dsname};
+    }
+
+    # Do we need to extract the parent?
+    if($parents) {
+        my $p = extractJobParent($logFileName);
+        push @{$sum->parents}, $p;
+    }
+
+}
+
+#================================================================
+# returns sha256 of the archive file
+sub writeArchive {
+    my ($clusterdir, $tar_filename) = @_;
+
+    my $dig = Digest->new('SHA-256');
+
+    print "\t",scalar(localtime()) . "  Archiving $clusterdir\n" if $verbosity > 1;
+
+    open(my $p, '-|',
+         'tar', '--create', '--bzip2', '--file=-',
+         "--directory=".dirname($clusterdir), basename($clusterdir))
+        or die "Can not run tar: $!\n";
+
+    my $outfh;
+    if(!$dryrun) {
+        File::Path::make_path(dirname($tar_filename));
+        open($outfh, '>', $tar_filename)
+            or die "error opening $tar_filename: $!\n";
+    }
+
+    my $filesize = 0;
+  TARLOOP:
+    while(1) {
+        my $buf='';
+        my $bufsize=1024*1024;
+        my $res = read($p, $buf, $bufsize);
+
+        die "Error reading from tar pipe: $!\n"
+            unless defined $res;
+
+        $filesize += $res;
+        last TARLOOP if $res == 0;
+
+        $dig->add($buf);
+        print $outfh $buf unless $dryrun;
+    }
+
+    close($p) or die "Error closing pipe: "
+        . ($! == 0 ? "tar exited with status ".($?>>8) : "$!")
+        ."\n";
+
+    if(!$dryrun) {
+        close($outfh) or die "Error closing output file $tar_filename: $!\n";
+    }
+
+    return ($filesize, $dig->hexdigest);
+}
+
+#================================================================
+# returns sha256 of the archive file
+sub declareFile($$$$$) {
+    my ($sw, $tar_filename, $filesize, $sha256, $parents) = @_;
+
+    print "\t",scalar(localtime()),"  ",($dryrun? 'Would register':'Registering'),
+    " $tar_filename in SAM\n" if $verbosity > 1;
+
+    my $fn = Mu2eFilename->parse(basename($tar_filename));
+
+    my $jsstruct = { file_name => $fn->basename,
+                     data_tier => $fn->tier,
+                     file_type => 'other',
+                     file_format => $fn->extension,
+                     file_size => $filesize,
+                     parents => $parents,
+                     'dh.owner' => $fn->owner,
+                     'dh.description' => $fn->description,
+                     'dh.configuration' => $fn->configuration,
+                     'dh.sequencer' => $fn->sequencer,
+                     'dh.dataset' => $fn->dataset->dsname,
+                     'dh.sha256' => $sha256,
+    };
+
+    my $json_text = to_json($jsstruct);
+
+    print "\t", ($dryrun ? "Would" : "About to"), " post json = $json_text\n"
+        if $verbosity > 3;
+
+    $sw->declareFile($json_text, { verbosity=>$verbosity})
+        unless $dryrun;
+}
+
+#================================================================
+sub usage() {
+    my $self = basename($0);
+    my $msg =<<EOF
+Usage:
+        $self [options] clusterdir1 [clusterdir2 ....]
+
+A scrip to archive log (and may be other) files from a mu2eprodsys
+cluster to tape and register the archive in SAM.  The input cluster
+directories are expected to be in the "good" workflow subdirectory.  A
+cluster directory will be move out of "good" at the start of
+processing.  If its archiving fails, files can be recovered from the
+"archiving/" workflow subdirectory.
+
+The supported options are
+
+    --allow=<dsname>      Log files are always whitelisted implicitly.
+                          For files from other datasets to be included
+                          in the archive, dataset names have to be
+                          given explicitly.  The --allow option can be
+                          repeated several times, it is cumulative.
+                          If dataset files are whitelisted for
+                          inclusion in the archive, the corresponding
+                          json files are also allowed.
+
+    --[no]parents         [Do not] declare parents of the archive file.
+                          "Parents" are the fcl files that defined jobs
+                          in the cluster.  Their names are extracted from
+                          the log files. The --parents option is on by default.
+
+    --dry-run             Analyze jobdirs, but do not change anything
+                          in the filesystem or in the database.
+
+    --verbosity=<int>     Verbosity level.  The default is 1.
+
+    --help                Print this message.
+
+    --samweb-help         Print information about options that control
+                          SAMWEB connections.
+EOF
+;
+
+    if($opt{'samweb-help'}) {
+        $msg .=
+            "\nSamweb connection options:\n\n"
+            . $sw->optDocString(' 'x4, ' 'x5);
+    }
+
+    return $msg;
+}
+
+#================================================================
+# Process command line opts.
+GetOptions(\%opt,
+           "allow=s",
+           "parents!",
+           "verbosity=i",
+           "dry-run",
+           "help",
+           "samweb-help",
+           @{$sw->optSpec},
+    )
+    or die "\nError processing command line options.\n";
+
+if($opt{'help'} or $opt{'samweb-help'}) {
+    print usage();
+    exit 0;
+}
+
+die "What job cluster(s) do you want to process? Try the --help option.\n" if ($#ARGV < 0);
+
+%whitelist = map {$_=>1} @allowed;
+
+$sw->authConfig();
+
+my $clustercount = 0;
+foreach my $in (@ARGV) {
+    my $dir = abs_path($in);
+    die "Error: can not determine abs_path for $in\n"
+        unless $dir;
+
+    my $clusterdir = move_clusterdir($dir);
+
+    print ++$clustercount, "\t",scalar(localtime()),"  Working on $clusterdir\n" if $verbosity > 0;
+
+    my $clustersum = Mu2eClusterSummary->new(parents=>[]);
+    Mu2eClusterDir::iterate($clusterdir, \&scanJobDir, $clustersum);
+
+    my $tfn = Mu2eDSName->parse($clustersum->logdsname)->file($clustersum->minseq);
+    $tfn->tier('bck');
+    $tfn->extension('tbz');
+    my $tar_filename = $tfn->abspathname($finalArchiveLocation);
+
+    print "   \tGot logdsname = ",$clustersum->logdsname,
+    ", minseq = ",$clustersum->minseq,
+    ", will use tar filename = $tar_filename",
+    ", parents = (",join(',',@{$clustersum->parents}),
+    ")\n" if $verbosity > 8;
+
+
+    if(!$dryrun)  {
+        # make a symlink that points to the archive, so that the output file
+        # is easy to find and remove if this script is killed before the archiving is complete
+        my $linkname = dirname($clusterdir).'/'.basename($tar_filename);
+        symlink($tar_filename, $linkname) or die "Error in symlink(): $!\n";
+    }
+
+    # run tar
+    my ($filesize, $sha256) = writeArchive($clusterdir, $tar_filename);
+
+    # prepare json and send it to the server
+    declareFile($sw, $tar_filename, $filesize, $sha256, $clustersum->parents);
+
+    # Cleanup
+    if(!$dryrun) {
+        File::Path::rmtree(dirname($clusterdir));
+    }
+}
+
+print "Done archiving $clustercount directories\n" if $verbosity > 0;
+
+exit 0;
+
+#================================================================
