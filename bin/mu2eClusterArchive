@@ -218,12 +218,16 @@ sub writeArchive {
         print $outfh $buf unless $dryrun;
     }
 
-    close($p) or die "Error closing pipe: "
-        . ($! == 0 ? "tar exited with status ".($?>>8) : "$!")
-        ."\n";
+    if(!close($p)) {
+        unlink $tar_filename;
+        die "Error closing pipe: "
+            . ($! == 0 ? "tar exited with status ".($?>>8) : "$!")
+            ."\n";
+    }
 
-    if(!$dryrun) {
-        close($outfh) or die "Error closing output file $tar_filename: $!\n";
+    if(!$dryrun and !close($outfh)) {
+        unlink $tar_filename;
+        die "Error closing output file $tar_filename: $!\n";
     }
 
     return ($filesize, $dig->hexdigest);
@@ -376,6 +380,9 @@ foreach my $in (@ARGV) {
     declareFile($sw, $tar_filename, $filesize, $sha256, $clustersum->parents);
 
     # Cleanup
+    print "\t",scalar(localtime()),"  ",($dryrun? 'Would remove ':'Removing '), " $clusterdir\n"
+        if $verbosity > 1;
+
     if(!$dryrun) {
         File::Path::rmtree(dirname($clusterdir));
     }
