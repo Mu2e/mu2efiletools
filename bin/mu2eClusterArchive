@@ -49,6 +49,11 @@ my @allowed = ();
 my $parents = 1;
 my $verbosity=2;
 my $dryrun=0;
+
+my $max_tar_tries = 5;
+my $initial_tar_retry_delay = 120; # seconds
+my $num_tar_failures = 0; # stat counter
+
 my $sw = Mu2eSWI->new;
 my %opt = (
     allow => \@allowed,
@@ -197,8 +202,10 @@ sub writeArchive {
     my $outfh;
     if(!$dryrun) {
         File::Path::make_path(dirname($tar_filename));
-        open($outfh, '>', $tar_filename)
-            or die "error opening $tar_filename: $!\n";
+        if(!open($outfh, '>', $tar_filename)) {
+            warn "error opening $tar_filename: $!\n";
+            return ();
+        }
     }
 
     my $filesize = 0;
@@ -208,8 +215,10 @@ sub writeArchive {
         my $bufsize=1024*1024;
         my $res = read($p, $buf, $bufsize);
 
-        die "Error reading from tar pipe: $!\n"
-            unless defined $res;
+        if(not defined $res) {
+            warn "Error reading from tar pipe: $!\n";
+            return ();
+        }
 
         $filesize += $res;
         last TARLOOP if $res == 0;
@@ -220,17 +229,49 @@ sub writeArchive {
 
     if(!close($p)) {
         unlink $tar_filename;
-        die "Error closing pipe: "
+        warn "Error closing pipe: "
             . ($! == 0 ? "tar exited with status ".($?>>8) : "$!")
             ."\n";
+        return ();
     }
 
     if(!$dryrun and !close($outfh)) {
         unlink $tar_filename;
-        die "Error closing output file $tar_filename: $!\n";
+        warn "Error closing output file $tar_filename: $!\n";
+        return ();
     }
 
     return ($filesize, $dig->hexdigest);
+}
+
+#================================================================
+# returns sha256 of the archive file
+sub writeArchiveRetries {
+    my ($clusterdir, $tar_filename) = @_;
+
+    my $numtries = 0;
+    my $delay = $initial_tar_retry_delay;
+
+    while(1) {
+        ++$numtries;
+
+        print "\t",scalar(localtime()) . "  Try $numtries: archiving $clusterdir\n" if $verbosity > 1;
+
+        my @res = writeArchive(@_);
+        return @res if scalar(@res);
+
+        ++$num_tar_failures;
+        print STDERR "Error archiving $clusterdir: on ",scalar(localtime()),"\n" if $verbosity > 0;
+
+        if($numtries >= $max_tar_tries) {
+            die "Error: $numtries tries to archive $clusterdir failed. Stopping on ",scalar(localtime());
+        }
+        else {
+            print STDERR "Will retry in $delay seconds\n" if $verbosity > 0;
+            sleep $delay;
+            $delay += int(rand($delay));
+        }
+    }
 }
 
 #================================================================
@@ -374,7 +415,7 @@ foreach my $in (@ARGV) {
     }
 
     # run tar
-    my ($filesize, $sha256) = writeArchive($clusterdir, $tar_filename);
+    my ($filesize, $sha256) = writeArchiveRetries($clusterdir, $tar_filename);
 
     # prepare json and send it to the server
     declareFile($sw, $tar_filename, $filesize, $sha256, $clustersum->parents);
@@ -388,7 +429,7 @@ foreach my $in (@ARGV) {
     }
 }
 
-print "Done archiving $clustercount directories\n" if $verbosity > 0;
+print "Done archiving $clustercount directories. Encountered $num_tar_failures tar errors.\n" if $verbosity > 0;
 
 exit 0;
 
