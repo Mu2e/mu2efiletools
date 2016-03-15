@@ -50,6 +50,7 @@ my $parents = 1;
 my $verbosity=2;
 my $dryrun=0;
 
+my $tar_prog = '/cvmfs/mu2e.opensciencegrid.org/bin/SLF6/mu2e_tar';
 my $max_tar_tries = 5;
 my $initial_tar_retry_delay = 120; # seconds
 my $num_tar_failures = 0; # stat counter
@@ -195,8 +196,9 @@ sub writeArchive {
     print "\t",scalar(localtime()) . "  Archiving $clusterdir\n" if $verbosity > 1;
 
     open(my $p, '-|',
-         'tar', '--create', '--bzip2', '--file=-',
-         "--directory=".dirname($clusterdir), basename($clusterdir))
+         $tar_prog, '--create', '--bzip2',
+         '--immediate-exit-on-error',
+         '--file=-', "--directory=".dirname($clusterdir), basename($clusterdir))
         or die "Can not run tar: $!\n";
 
     my $outfh;
