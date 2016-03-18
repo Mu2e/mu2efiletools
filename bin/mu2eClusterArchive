@@ -198,6 +198,7 @@ sub writeArchive {
     open(my $p, '-|',
          $tar_prog, '--create', '--bzip2',
          '--immediate-exit-on-error',
+         '--ignore-ctime-change',
          '--file=-', "--directory=".dirname($clusterdir), basename($clusterdir))
         or die "Can not run tar: $!\n";
 
