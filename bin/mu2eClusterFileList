@@ -82,6 +82,9 @@ if($opt{'help'}) {
 
 die "Error: --dsname is required. Try the --help option.\n" unless $dsname ne '';
 
+# Check that dsname is valid
+Mu2eDSName->parse($dsname);
+
 die "What job cluster(s) do you want to process? Try the --help option.\n" if ($#ARGV < 0);
 foreach my $dir (@ARGV) {
     Mu2eClusterDir::iterate($dir, \&processJobDir);
