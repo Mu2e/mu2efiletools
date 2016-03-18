@@ -217,7 +217,7 @@ sub processFile($$) {
 
     if(not -e $pathname) {
         ++$numNoFile;
-        print "$numTotalFiles\tNOFILE: $pathname\n";
+        print "$numTotalFiles\tNOFILE: $pathname on ",scalar(localtime()),"\n";
         return;
     }
 
@@ -228,7 +228,7 @@ sub processFile($$) {
         $tapeinfo = getEnstoreInfo($pathname);
         if(not defined $tapeinfo) {
             ++$numNoTape;
-            print "$numTotalFiles\tNO_TAPE_LABEL: $pathname\n";
+            print "$numTotalFiles\tNO_TAPE_LABEL: $pathname on ",scalar(localtime()),"\n";
             return;
         }
         else {
@@ -242,14 +242,36 @@ sub processFile($$) {
 
     if(hexdigest($pathname) ne $samsha) {
         ++$numBad;
-        print "$numTotalFiles\tBADHASH: $numTotalFiles $pathname\n";
+        print "$numTotalFiles\tBADHASH: $numTotalFiles $pathname on ",scalar(localtime()),"\n";
         return;
     }
 
     maybeAddLocationToSam($sw, $pathname, $tapeinfo);
 
     ++$numGood;
-    print "$numTotalFiles\tOK: $pathname\n" if $verbosity > 1;
+    print "$numTotalFiles\tOK: $pathname on ",scalar(localtime()),"\n" if $verbosity > 1;
+}
+
+#================================================================
+sub processDataset {
+    my $dsname = shift;
+
+    my @fl = $sw->listFiles("dh.dataset=$dsname with availability virtual");
+
+    if(scalar(@fl) > 0) {
+        print "Will check ",scalar(@fl)," files for dataset $dsname on ",
+        scalar(localtime()),".\n";
+
+        for my $file (@fl) {
+            my $fn = Mu2eFilename->parse($file);
+            my $pathname = $fn->abspathname($add_target);
+            processFile($sw, $pathname);
+        }
+    }
+    else {
+        print "No virtual files in dataset $dsname. Nothing to do on ",
+        scalar(localtime()),".\n";
+    }
 }
 
 #================================================================
@@ -304,10 +326,8 @@ if($opt{'help'}) {
     exit 0;
 }
 
-die "ERROR: Exactly one dataset name must be specified.  Try the --help option.\n"
-    unless $#ARGV ==  0;
-
-my $dsname = $ARGV[0];
+die "ERROR: At least one dataset name must be specified.  Try the --help option.\n"
+    unless $#ARGV >=  0;
 
 die "ERROR: --add parameter must be specified\n" if($add_target eq '');
 my $known = 0;
@@ -318,28 +338,17 @@ die "Unknown dataset location '$add_target'\n" unless $known;
 
 $sw->authConfig();
 
-my @fl = $sw->listFiles("dh.dataset=$dsname with availability virtual");
-
-if(scalar(@fl) > 0) {
-    print "Will check ",scalar(@fl)," files.\n";
-
-    for my $file (@fl) {
-        my $fn = Mu2eFilename->parse($file);
-        my $pathname = $fn->abspathname($add_target);
-        processFile($sw, $pathname);
-    }
-
-    printf "Computed SHA-256 on %.3f GB in %.2f s\n", $totalReadBytes/1024/1024/1024,  $totalSHATime;
-    printf "SAMWeb times: query metadata = %.2f s,  query location = %.2f s, update location = %.2f s\n",
-        $totalMetadataQueryTime, $totalLocationQueryTime, $totalLocationUpdateTime;
-
-    print "Summary1: out of $numTotalFiles virtual dataset files $numNoFile were not found on $add_target.\n";
-    print "Summary2: successfully verified $numGood files, added locations for $numAddedLocation files.\n";
-    print "Summary3: found $numBad corrupted files and $numNoTape files without tape labels.\n";
+foreach my $ds (@ARGV) {
+    processDataset($ds);
 }
-else {
-    print "No virtual files in dataset $dsname. Nothing to do.\n";
-}
+
+printf "Computed SHA-256 on %.3f GB in %.2f s\n", $totalReadBytes/1024/1024/1024,  $totalSHATime;
+printf "SAMWeb times: query metadata = %.2f s,  query location = %.2f s, update location = %.2f s\n",
+    $totalMetadataQueryTime, $totalLocationQueryTime, $totalLocationUpdateTime;
+
+print "Summary1: out of $numTotalFiles virtual dataset files $numNoFile were not found on $add_target.\n";
+print "Summary2: successfully verified $numGood files, added locations for $numAddedLocation files.\n";
+print "Summary3: found $numBad corrupted files and $numNoTape files without tape labels.\n";
 
 exit 0;
 
