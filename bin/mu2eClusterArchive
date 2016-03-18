@@ -381,6 +381,11 @@ if($opt{'help'} or $opt{'samweb-help'}) {
 
 die "What job cluster(s) do you want to process? Try the --help option.\n" if ($#ARGV < 0);
 
+foreach my $ds (@allowed) {
+    # make sure cmdline parameters make sense
+    Mu2eDSName->parse($ds);
+}
+
 %whitelist = map {$_=>1} @allowed;
 
 $sw->authConfig();
