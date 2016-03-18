@@ -394,7 +394,7 @@ sub isGlobalDup($$$) {
 
     print "\t", ($dryrun ? "Would" : "About to"), " post json = $json_text\n" if $verbosity > 1;
 
-    my $duplicate = 1;
+    my $duplicate = !$dryrun;
 
     if(!$dryrun) {
         my $res = $sw->declareFile($json_text,
