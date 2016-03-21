@@ -45,7 +45,7 @@ my $verbosity=1;
 my $dryrun=0;
 my $nosam=0;
 my $sw = Mu2eSWI->new;
-my %opt = ('verify-data'=>0,
+my %opt = ('verify-data'=>1,
            'timecut'=>\$timecut,
            verbosity=>\$verbosity,
            'nosam' => \$nosam,
@@ -594,10 +594,10 @@ the same cluster as more jobs complete.
 
 The supported options are
 
-    --verify-data         Compute and check a SHA-256 digest of data files.
-                          This is off by default, because file integrity
-                          should be verified after file upload anyway.
-                          Json and log file checksums are always verified.
+    --[no]verify-data     Compute and check a SHA-256 digest of all files.
+                          This is on by default.  If --noverify-data
+                          is used, only json and log file checksums will
+                          be verified.
 
     --timecut=<int>       Skip outputs that were modified more recently than the
                           given number of seconds - they may still be written by
