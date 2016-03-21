@@ -542,7 +542,7 @@ sub processJobDir($$$) {
     }
 
     print ++$currentJobNumber, "  ",
-    ($failed ? "FAILED" : "OK"), ":\t$jobdir\n" if $verbosity;
+    ($failed ? "FAILED" : "OK"), ":\t$jobdir on ",scalar(localtime()),"\n" if $verbosity;
 }
 
 #================================================================
