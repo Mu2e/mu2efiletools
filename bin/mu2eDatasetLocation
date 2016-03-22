@@ -256,6 +256,9 @@ sub processFile($$) {
 sub processDataset {
     my $dsname = shift;
 
+    # make sure cmdline parameters make sense
+    Mu2eDSName->parse($dsname);
+
     my @fl = $sw->listFiles("dh.dataset=$dsname with availability virtual");
 
     if(scalar(@fl) > 0) {
