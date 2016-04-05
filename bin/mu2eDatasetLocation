@@ -27,11 +27,13 @@ use Class::Struct Mu2eEnstoreInfo => [label=>'$', location_cookie=>'$'];
 
 my $add_target='';
 my $dryrun = 0;
+my $force_verify = 0;
 my $verbosity=3;
 my $sw = Mu2eSWI->new;
 
 my %opt = ( 'add'=>\$add_target,
             'dry-run'=>\$dryrun,
+            'force-verify'=>\$force_verify,
             verbosity=>\$verbosity,
             help=>0,
             %{$sw->optDefaults},
@@ -210,6 +212,15 @@ sub maybeAddLocationToSam($$$) {
 }
 
 #================================================================
+sub sha256ok($) {
+    my ($pathname) = @_;
+
+    my $samsha = $sw->getSamSha(basename($pathname), {metadataQueryTime=>\$totalMetadataQueryTime});
+
+    return hexdigest($pathname) eq $samsha;
+}
+
+#================================================================
 sub processFile($$) {
     my ($sw, $pathname) = @_;
 
@@ -227,9 +238,16 @@ sub processFile($$) {
     if(tapeBacked($pathname)) {
         $tapeinfo = getEnstoreInfo($pathname);
         if(not defined $tapeinfo) {
-            ++$numNoTape;
-            print "$numTotalFiles\tNO_TAPE_LABEL: $pathname on ",scalar(localtime()),"\n";
-            return;
+            if(!$force_verify or sha256ok($pathname)) {
+                ++$numNoTape;
+                print "$numTotalFiles\tNO_TAPE_LABEL: $pathname on ",scalar(localtime()),"\n";
+                return;
+            }
+            else {
+                ++$numBad;
+                print "$numTotalFiles\tBADHASH: $pathname on ",scalar(localtime()),"\n";
+                return;
+            }
         }
         else {
             print "Got enstore info: tape = ",$tapeinfo->label,
@@ -238,11 +256,9 @@ sub processFile($$) {
         }
     }
 
-    my $samsha = $sw->getSamSha(basename($pathname), {metadataQueryTime=>\$totalMetadataQueryTime});
-
-    if(hexdigest($pathname) ne $samsha) {
+    if(not sha256ok($pathname)) {
         ++$numBad;
-        print "$numTotalFiles\tBADHASH: $numTotalFiles $pathname on ",scalar(localtime()),"\n";
+        print "$numTotalFiles\tBADHASH: $pathname on ",scalar(localtime()),"\n";
         return;
     }
 
@@ -300,6 +316,8 @@ EOF
 
     --dry-run               Go through the moves, but do not write to the database.
 
+    --force-verify          Do not skip files without tape labels when checking sha256sum.
+
     --verbosity=<int>       Verbosity level. The default is $verbosity.
                             1 print a line per file that failed verification
                             2 printouts for OK and failed, but not skipped files
@@ -319,6 +337,7 @@ GetOptions(\%opt,
            "add=s",
            "verbosity=i",
            "dry-run",
+           "force-verify",
            "help",
            @{$sw->optSpec},
            )
