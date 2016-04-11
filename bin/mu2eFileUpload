@@ -48,6 +48,16 @@ sub needToCopy($) {
 }
 
 #================================================================
+sub dCacheChecksum {
+    my $fn = shift;
+    my $ckn = dirname($fn) . '/.(get)('.basename($fn).')(checksum)';
+    open(my $fh, '<', $ckn) or die "Error opening pnfs checksum file $ckn : $!\n";
+    my $res = <$fh>;
+    chomp $res;
+    return $res;
+}
+
+#================================================================
 sub processFile($) {
     my ($infile) = @_;
     my $fn = Mu2eFilename->parse(basename($infile));
@@ -94,6 +104,13 @@ sub processFile($) {
 
                 $totalCopiedBytes += $st->size;
                 $totalCopyTime += $elapsed;
+
+                if(!$dryrun) {
+                    my $srccheck = dCacheChecksum($infile);
+                    my $dstcheck = dCacheChecksum($stdpath);
+                    die "Detected data corruption: dst checksum = $dstcheck != source checksum $srccheck\n"
+                        if($srccheck ne $dstcheck);
+                }
 
                 if(!$dryrun and !$forcecopy) {
                     unlink $infile
