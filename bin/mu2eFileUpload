@@ -106,10 +106,12 @@ sub processFile($) {
                 $totalCopyTime += $elapsed;
 
                 if(!$dryrun) {
-                    my $srccheck = dCacheChecksum($infile);
-                    my $dstcheck = dCacheChecksum($stdpath);
-                    die "Detected data corruption: dst checksum = $dstcheck != source checksum $srccheck\n"
-                        if($srccheck ne $dstcheck);
+                    if($infile =~ m|/pnfs|) {
+                        my $srccheck = dCacheChecksum($infile);
+                        my $dstcheck = dCacheChecksum($stdpath);
+                        die "Detected data corruption: dst checksum = $dstcheck != source checksum $srccheck\n"
+                            if($srccheck ne $dstcheck);
+                    }
                 }
 
                 if(!$dryrun and !$forcecopy) {
