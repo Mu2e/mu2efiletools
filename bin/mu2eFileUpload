@@ -6,13 +6,14 @@
 #
 
 use strict;
+use Fcntl;
 use File::Basename;
 use File::Path qw(make_path);
 use File::stat;
-use File::Copy;
 use Getopt::Long;
 use Digest;
 use Time::HiRes qw(gettimeofday tv_interval);
+use Compress::Zlib;
 use Cwd 'abs_path';
 
 use Mu2eFilename;
@@ -58,6 +59,36 @@ sub dCacheChecksum {
 }
 
 #================================================================
+sub checked_copy($$) {
+    my ($infile, $outfile) = @_;
+
+    sysopen(my $in, $infile, O_RDONLY)
+        or die "Can not open input \"$infile\": $! on ".localtime()."\n";
+
+    sysopen(my $out, $outfile, O_WRONLY | O_EXCL | O_CREAT)
+        or die "Can not create output \"$outfile\": $! on ".localtime()."\n";
+
+    my $blocksize = 4*1024*1024;
+    my ($rst, $crc);
+    while($rst = sysread($in, my $buf, $blocksize)) {
+        $crc = adler32($buf, $crc);
+        syswrite($out, $buf)
+            or die "Error writing to \"$outfile\": $! on ".localtime()."\n";
+
+    }
+
+    die "Error reading \"$infile\": $! on ".localtime()."\n"
+        unless defined $rst;
+
+    close $out or die "Error closing output \"$outfile\": $!  on ".localtime()."\n";
+    close $in  or die "Error closing input \"$infile\": $!  on ".localtime()."\n";
+
+    my $checksum = sprintf "ADLER32:%x", $crc;
+
+    return $checksum;
+}
+
+#================================================================
 sub processFile($) {
     my ($infile) = @_;
     my $fn = Mu2eFilename->parse(basename($infile));
@@ -93,7 +124,7 @@ sub processFile($) {
                 # Use high precision time to measure the data transfer rate.
                 my $t1 = [gettimeofday()];
 
-                copy($infile, $stdpath) or die "Error copying $infile to $stdpath: $! on ".localtime()."\n";
+                my $readcheck = checked_copy($infile, $stdpath);
 
                 my $elapsed = tv_interval($t1);
 
@@ -106,11 +137,14 @@ sub processFile($) {
                 $totalCopyTime += $elapsed;
 
                 if(!$dryrun) {
+                    my $dstcheck = dCacheChecksum($stdpath);
+                    die "Detected data corruption on write: dst checksum = $dstcheck != read checksum $readcheck\n"
+                        if($dstcheck ne $readcheck);
+
                     if($infile =~ m|/pnfs|) {
                         my $srccheck = dCacheChecksum($infile);
-                        my $dstcheck = dCacheChecksum($stdpath);
-                        die "Detected data corruption: dst checksum = $dstcheck != source checksum $srccheck\n"
-                            if($srccheck ne $dstcheck);
+                        die "Detected data corruption on read: read checksum = $readcheck != source checksum $srccheck\n"
+                            if($srccheck ne $readcheck);
                     }
                 }
 
