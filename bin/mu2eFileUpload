@@ -83,7 +83,7 @@ sub checked_copy($$) {
     close $out or die "Error closing output \"$outfile\": $!  on ".localtime()."\n";
     close $in  or die "Error closing input \"$infile\": $!  on ".localtime()."\n";
 
-    my $checksum = sprintf "ADLER32:%x", $crc;
+    my $checksum = sprintf "ADLER32:%08x", $crc;
 
     return $checksum;
 }
