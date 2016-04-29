@@ -52,10 +52,33 @@ sub needToCopy($) {
 sub dCacheChecksum {
     my $fn = shift;
     my $ckn = dirname($fn) . '/.(get)('.basename($fn).')(checksum)';
-    open(my $fh, '<', $ckn) or die "Error opening pnfs checksum file $ckn : $!\n";
-    my $res = <$fh>;
-    chomp $res;
-    return $res;
+
+    my $currentTry = 0;
+    my $delay = 5; # seconds
+
+    my $res = '';
+
+  CKLOOP: while(1) {
+      if(open(my $fh, '<', $ckn)) {
+          $res = <$fh>;
+          chomp $res;
+          return $res if $res ne '';
+      }
+      else {
+          warn "Warning: could not open pnfs checksum file $ckn : $! on ",scalar(localtime()),"\n";
+      }
+
+      ++$currentTry;
+      if($currentTry >= 3) {
+          die "ERROR: could not get dCacheChecksum() after $currentTry tries.\n";
+      }
+      else {
+          print "dCacheChecksum($fn): retrying on ",scalar(localtime()),"\n";
+      }
+
+      sleep $delay;
+      $delay *= 2;
+  }
 }
 
 #================================================================
