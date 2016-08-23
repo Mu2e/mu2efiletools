@@ -341,14 +341,35 @@ sub ensureDatasetDefinition {
 }
 
 #================================================================
-sub getSamSha($$) {
+# The last argument is a reference to a hash.  The call behavior is
+# affected by the following keys, all of which are optional:
+#
+# verbosity         : the verbosity level. Default is 1.
+#
+# metadataQueryTime : the value will be treated as a ref to a scalar,
+#                     and the scalar will be incremented by the time
+#                     spent talking to the server.
+#
+# allowedFailCodes  : a reference to list of HTTP failure codes on
+#                     which to return failure instead of retrying or
+#                     croaking.  If the list is empty (or not
+#                     defined), the method either succeeds or croaks.
+#
+# noRetryCodes      : a reference to list of HTTP failure codes on
+#                     which the request is not retried.
+#
+# The return value is a JSON struct, or undef (if allowedFailCodes
+# is non-empty).
+
+sub getFileMetadata {
     my ($self,$filename, $inopts) = @_;
 
     my $opts = $inopts // {};
     my $verbosity = $$opts{'verbosity'} // 1;
     my $timing = $$opts{'metadataQueryTime'};
+    my $allowedFailCodes = $$opts{'allowedFailCodes'} // [];
+    my $noRetryCodes = $$opts{'noRetryCodes'} // [];
 
-    # Get sha256 from file metadata
     my $req = HTTP::Request->new(GET => $self->read_server.'/sam/mu2e/api/files/name/'.$filename.'/metadata?format=json');
 
     my $numtries = 0;
@@ -369,15 +390,27 @@ sub getSamSha($$) {
         if ($res->is_success) {
             my $jstext = $res->content;
             print "got json = $jstext\n" if $verbosity > 8;
-            my $js = from_json($jstext);
-
-            my $jssha = ${$js}{'dh.sha256'};
-            my $now_string = localtime();
-            die "Error: no dh.sha256 SAM record for file $filename on $now_string\n" unless defined $jssha;
-            return $jssha;
+            return from_json($jstext);
         }
         else {
+            # allowedFailCodes lists "failures" expected in the normal
+            # operation such as when checking whether a record for a
+            # file is present.
+            # Return before the "debug" printouts below.
+            for my $code (@$allowedFailCodes) {
+                return undef if($code == $res->code);
+            }
+
             my $now_string = localtime();
+            for my $code (@$noRetryCodes) {
+                if($code == $res->code) {
+                    croak "Error: got server response ",
+                    $res->status_line, ".\n",
+                    $res->content, "\n",
+                    "Stopping on $now_string.";
+                }
+            }
+
             print STDERR "Error querying metadata for file $filename: ",$res->status_line," on $now_string\n" if $verbosity > 0;
             print STDERR "Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 8;
             if($numtries >= $self->maxtries) {
@@ -393,7 +426,20 @@ sub getSamSha($$) {
     }
 }
 
+#================================================================
+sub getSamSha {
+    my ($self,$filename, $inopts) = @_;
 
+    my $js = $self->getFileMetadata($filename, $inopts);
+    croak "Error getting metadata for $filename on ".localtime()."\n"
+        unless defined($js);
+
+    my $jssha = $js->{'dh.sha256'};
+    croak "Error: no dh.sha256 SAM record for file $filename on ".localtime()."\n"
+        unless defined $jssha;
+
+    return $jssha;
+}
 
 #================================================================
 1;
