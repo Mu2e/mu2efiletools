@@ -6,17 +6,18 @@
 #
 
 use strict;
-use Fcntl;
 use File::Basename;
 use File::Path qw(make_path);
 use File::stat;
 use Getopt::Long;
 use Digest;
 use Time::HiRes qw(gettimeofday tv_interval);
-use Compress::Zlib;
 use Cwd 'abs_path';
 
 use Mu2eFilename;
+
+use lib dirname($0);
+use Mu2eUtils;
 
 use constant TAPE => 'tape';
 use constant DISK => 'disk';
@@ -46,69 +47,6 @@ sub needToCopy($) {
     return 0 if $dstarea eq SCRATCH() and $absin =~ m|^/pnfs/mu2e/scratch|;
 
     return 1;
-}
-
-#================================================================
-sub dCacheChecksum {
-    my $fn = shift;
-    my $ckn = dirname($fn) . '/.(get)('.basename($fn).')(checksum)';
-
-    my $currentTry = 0;
-    my $delay = 5; # seconds
-
-    my $res = '';
-
-  CKLOOP: while(1) {
-      if(open(my $fh, '<', $ckn)) {
-          $res = <$fh>;
-          chomp $res;
-          return $res if $res ne '';
-      }
-      else {
-          warn "Warning: could not open pnfs checksum file $ckn : $! on ",scalar(localtime()),"\n";
-      }
-
-      ++$currentTry;
-      if($currentTry >= 3) {
-          die "ERROR: could not get dCacheChecksum() after $currentTry tries.\n";
-      }
-      else {
-          print "dCacheChecksum($fn): retrying on ",scalar(localtime()),"\n";
-      }
-
-      sleep $delay;
-      $delay *= 2;
-  }
-}
-
-#================================================================
-sub checked_copy($$) {
-    my ($infile, $outfile) = @_;
-
-    sysopen(my $in, $infile, O_RDONLY)
-        or die "Can not open input \"$infile\": $! on ".localtime()."\n";
-
-    sysopen(my $out, $outfile, O_WRONLY | O_EXCL | O_CREAT)
-        or die "Can not create output \"$outfile\": $! on ".localtime()."\n";
-
-    my $blocksize = 4*1024*1024;
-    my ($rst, $crc);
-    while($rst = sysread($in, my $buf, $blocksize)) {
-        $crc = adler32($buf, $crc);
-        syswrite($out, $buf)
-            or die "Error writing to \"$outfile\": $! on ".localtime()."\n";
-
-    }
-
-    die "Error reading \"$infile\": $! on ".localtime()."\n"
-        unless defined $rst;
-
-    close $out or die "Error closing output \"$outfile\": $!  on ".localtime()."\n";
-    close $in  or die "Error closing input \"$infile\": $!  on ".localtime()."\n";
-
-    my $checksum = sprintf "ADLER32:%08x", $crc;
-
-    return $checksum;
 }
 
 #================================================================
@@ -144,10 +82,16 @@ sub processFile($) {
 
             if(!$dryrun) {
 
-                # Use high precision time to measure the data transfer rate.
+                # Use high precision time to measure the data transfer
+                # rate.  Note that the checked_copy() call does more
+                # than just copy the bytes; it also retrieves and
+                # verifies dCache checksums. Therefore the rate
+                # measurement here is biased, because we attribute all
+                # of the elapsed time to the data copy.
+
                 my $t1 = [gettimeofday()];
 
-                my $readcheck = checked_copy($infile, $stdpath);
+                my $readcheck = Mu2eUtils::checked_copy($infile, $stdpath);
 
                 my $elapsed = tv_interval($t1);
 
@@ -158,18 +102,6 @@ sub processFile($) {
 
                 $totalCopiedBytes += $st->size;
                 $totalCopyTime += $elapsed;
-
-                if(!$dryrun) {
-                    my $dstcheck = dCacheChecksum($stdpath);
-                    die "Detected data corruption on write: dst checksum = $dstcheck != read checksum $readcheck\n"
-                        if($dstcheck ne $readcheck);
-
-                    if($infile =~ m|/pnfs|) {
-                        my $srccheck = dCacheChecksum($infile);
-                        die "Detected data corruption on read: read checksum = $readcheck != source checksum $srccheck\n"
-                            if($srccheck ne $readcheck);
-                    }
-                }
 
                 if(!$dryrun and !$forcecopy) {
                     unlink $infile

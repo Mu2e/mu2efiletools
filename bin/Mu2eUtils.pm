@@ -10,7 +10,10 @@ use strict;
 use Exporter qw( import );
 use Carp;
 use File::Basename;
+use Cwd 'abs_path';
 use Digest;
+use Compress::Zlib qw(adler32);
+use Fcntl;
 
 use Class::Struct Mu2eEnstoreInfo => [label=>'$', location_cookie=>'$'];
 
@@ -99,6 +102,84 @@ sub getEnstoreInfo($) {
     }
 
     return filterLocationCookie($fi);
+}
+
+#================================================================
+sub dCacheChecksum($) {
+    my $fn = shift;
+    my $ckn = dirname($fn) . '/.(get)('.basename($fn).')(checksum)';
+
+    my $currentTry = 0;
+    my $delay = 5; # seconds
+
+    my $res = '';
+
+  CKLOOP: while(1) {
+      if(open(my $fh, '<', $ckn)) {
+          $res = <$fh>;
+          chomp $res;
+          return $res if $res ne '';
+      }
+      else {
+          warn "Warning: could not open pnfs checksum file $ckn : $! on ",scalar(localtime()),"\n";
+      }
+
+      ++$currentTry;
+      if($currentTry >= 3) {
+          die "ERROR: could not get dCacheChecksum() after $currentTry tries.\n";
+      }
+      else {
+          print "dCacheChecksum($fn): will retry in $delay seconds\n";
+      }
+
+      sleep $delay;
+      $delay *= 2;
+  }
+}
+
+#================================================================
+# Copies $infile to an $outfile on /pnfs, computing an adler32
+# checksum on bytes in transit.  The checksum is compared against
+# dCache-computed value for $outfile, and, if available, for $infile.
+#
+# A pre-requisite: the destination directory must exist.
+#
+sub checked_copy($$) {
+    my ($infile, $outfile) = @_;
+
+    sysopen(my $in, $infile, O_RDONLY)
+        or die "Can not open input \"$infile\": $! on ".localtime()."\n";
+
+    sysopen(my $out, $outfile, O_WRONLY | O_EXCL | O_CREAT)
+        or die "Can not create output \"$outfile\": $! on ".localtime()."\n";
+
+    my $blocksize = 4*1024*1024;
+    my ($rst, $crc);
+    while($rst = sysread($in, my $buf, $blocksize)) {
+        $crc = adler32($buf, $crc);
+        syswrite($out, $buf)
+            or die "Error writing to \"$outfile\": $! on ".localtime()."\n";
+    }
+
+    die "Error reading \"$infile\": $! on ".localtime()."\n"
+        unless defined $rst;
+
+    close $out or die "Error closing output \"$outfile\": $!  on ".localtime()."\n";
+    close $in  or die "Error closing input \"$infile\": $!  on ".localtime()."\n";
+
+    my $readcheck = sprintf "ADLER32:%08x", $crc;
+
+    my $dstcheck = dCacheChecksum($outfile);
+    die "Detected data corruption on write: dst checksum = $dstcheck != read checksum $readcheck\n"
+        if($dstcheck ne $readcheck);
+
+    if(abs_path($infile) =~ m|^/pnfs|) {
+        my $srccheck = dCacheChecksum($infile);
+        die "Detected data corruption on read: read checksum = $readcheck != source checksum $srccheck\n"
+            if($srccheck ne $readcheck);
+    }
+
+    return $readcheck;
 }
 
 #================================================================
