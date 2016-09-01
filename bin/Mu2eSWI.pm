@@ -442,4 +442,74 @@ sub getSamSha {
 }
 
 #================================================================
+# The last argument is a reference to a hash.  The call behavior is
+# affected by the following keys, all of which are optional:
+#
+# dryrun            : Do not modify the database if set. The default is 0.
+#
+# verbosity         : the verbosity level. The default is 1.
+#
+# serverUpdateTime  : the value will be treated as a ref to a scalar,
+#                     and the scalar will be incremented by the time
+#                     spent talking to the server.
+#
+# Returns the number of added locations: 0 if dryrun is used, 1 otherwise.
+#
+sub maybeAddLocationToSam {
+    my ($self, $fn, $location, $inopts) = @_;
+
+    my $opts = $inopts // {};
+    my $verbosity = $$opts{'verbosity'} // 1;
+    my $dryrun = $$opts{'dryrun'} // 0;
+    my $timing = $$opts{'serverUpdateTime'};
+
+    # Note: the documentation at
+    # https://cdcvs.fnal.gov/redmine/projects/sam-web/wiki/Interface_definitions
+    # specifies HTTP PUT for adding a location. However it seems we should use POST instead.
+
+    print +($dryrun ? "Would add" : "Adding" ). " to SAM location = $location\n" if $verbosity > 8;
+    if(not $dryrun) {
+
+        my $numtries = 0;
+        my $delay = $self->delay;
+        while(1) {
+            ++$numtries;
+
+            my $t1 = $timing ? [gettimeofday()] : undef;
+            my $res = $self->ua->request(
+                POST $self->write_server.'/sam/mu2e/api/files/name/'.$fn.'/locations',
+                Content => {'add' => $location }
+                );
+
+            if($timing) {
+                my $elapsed = tv_interval($t1);
+                $$timing += $elapsed;
+            }
+
+            if ($res->is_success) {
+                print "Added location $location for file $fn to SAM. Server response:\n", Dumper($res), "\n" if $verbosity > 8;
+                return 1;
+            }
+            else {
+                print STDERR "Error adding location $location for for file $fn: ",$res->status_line," on ".localtime()."\n" if $verbosity > 0;
+                print STDERR "Dump of the server response:\n", Dumper($res), "\n" if $verbosity > 8;
+
+                if($numtries >= $self->maxtries) {
+                    die "Error: $numtries tries failed. Stopping on ".localtime()." due to: ",
+                    $res->status_line, ".\n", $res->content,"\n";
+                }
+                else {
+                    print STDERR "Will retry in $delay seconds\n" if $verbosity > 0;
+                    sleep $delay;
+                    $delay += int(rand($delay));
+                }
+            }
+
+        } # retry loop
+    } # not(dryrun)
+
+    return 0;
+}
+
+#================================================================
 1;
