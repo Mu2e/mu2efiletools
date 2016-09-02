@@ -144,8 +144,13 @@ sub dCacheChecksum($) {
 #
 # A pre-requisite: the destination directory must exist.
 #
-sub checked_copy($$) {
-    my ($infile, $outfile) = @_;
+sub checked_copy {
+    my ($infile, $outfile, $inopts) = @_;
+
+    my $opts = $inopts // {};
+    my $sha256 = $$opts{'sha256'};
+
+    my $dig = $sha256 ? Digest->new('SHA-256') : undef;
 
     sysopen(my $in, $infile, O_RDONLY)
         or die "Can not open input \"$infile\": $! on ".localtime()."\n";
@@ -157,6 +162,7 @@ sub checked_copy($$) {
     my ($rst, $crc);
     while($rst = sysread($in, my $buf, $blocksize)) {
         $crc = adler32($buf, $crc);
+        $dig->add($buf) if($dig);
         syswrite($out, $buf)
             or die "Error writing to \"$outfile\": $! on ".localtime()."\n";
     }
@@ -177,6 +183,10 @@ sub checked_copy($$) {
         my $srccheck = dCacheChecksum($infile);
         die "Detected data corruption on read: read checksum = $readcheck != source checksum $srccheck\n"
             if($srccheck ne $readcheck);
+    }
+
+    if($sha256) {
+        $$sha256 = $dig->hexdigest;
     }
 
     return $readcheck;
