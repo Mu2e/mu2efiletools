@@ -1,0 +1,325 @@
+#!/usr/bin/perl -w
+#
+# See usage() below, or run this script with --help for docs.
+#
+# A.Gaponenko, 2016
+#
+
+use strict;
+use English '-no_match_vars';
+use File::Basename;
+use File::Path qw(make_path);
+use File::Temp;
+use Cwd 'abs_path';
+use Getopt::Long;
+use Digest;
+use JSON;
+use HTTP::Status qw(:constants);
+use Data::Dumper;
+use Mu2eFilename;
+
+use lib dirname($0);
+use Mu2eSWI;
+use Mu2eUtils;
+
+my $delay=15*60;
+my $verbosity=2;
+my $dryrun=0;
+
+my $sw = Mu2eSWI->new;
+my %opt = (
+    delay=>\$delay,
+    verbosity=>\$verbosity,
+    'dry-run'=>\$dryrun,
+    help=>0,
+    %{$sw->optDefaults},
+    );
+
+#================================================================
+sub usage() {
+    my $self = basename($0);
+    my $msg =<<EOF
+Usage:
+        $self [options] file1 [file2 ...]
+
+A "single shot" script for moving a file to tape and making sure that
+SAM has information about its location on tape.  It is designed for
+ease of use and robustness rather than efficiency.
+
+Note that this script can take a very long time to run (sometimes a
+day or more) even for small input files. This is because it waits for
+files to be actually written to tape.  The script is robust agains
+interruptions.  If you started to move your files and the operation
+was interrupted, you can re-run this script on the same files.  Once
+everything is done, the original files are removed.  A file not
+removed means something was not done.  In that case try re-running the
+command - do not remove the file by hand, because you will be left
+with incomplete SAM info, and possibly a damaged copy on tape.
+
+The supported options are
+
+    --delay=<int>         The interval between checking dCache for tape labels.
+
+    --verbosity=<int>     Verbosity level.  The default is 1.
+
+    --dry-run             Go throught the moves but do not change anything
+                          in the filesystem or in the SAME database.
+
+    --help                Print this message.
+
+    --samweb-help         Print information about options that control
+                          SAMWEB connections.
+EOF
+;
+
+    if($opt{'samweb-help'}) {
+        $msg .=
+            "\nSamweb connection options:\n\n"
+            . $sw->optDocString(' 'x4, ' 'x5);
+    }
+
+    return $msg;
+}
+
+#================================================================
+# Returns sha256sum of the file
+sub writeFileTodCache($$) {
+    my ($srcfile, $dstfile) = @_;
+    print localtime().": Writing $srcfile to dCache\n"
+        if $verbosity;
+
+    my $sha256;
+
+    my $outdir = dirname($dstfile);
+    if(!$dryrun) {
+        make_path($outdir);
+        -d $outdir or die "Error creating directory path $outdir: $! on ".localtime()."\n";
+
+        Mu2eUtils::checked_copy($srcfile, $dstfile, {'sha256'=>\$sha256});
+    }
+
+    return $sha256;
+}
+
+#================================================================
+# register the file, unless --dry-run is requested
+sub maybeRegisterFileInSAM($$$) {
+    my ($sw, $dstfile, $sha256) = @_;
+
+    my $fn = Mu2eFilename->parse(basename($dstfile));
+
+    my $jsstruct = { data_tier => $fn->tier,
+                     file_name => $fn->basename,
+                     file_size => 0 + (-s $dstfile),
+                     file_type => 'other',
+                     file_format => $fn->extension,
+                     'dh.owner' => $fn->owner,
+                     'dh.description' => $fn->description,
+                     'dh.configuration' => $fn->configuration,
+                     'dh.sequencer' => $fn->sequencer,
+                     'dh.dataset' => $fn->dataset->dsname,
+                     'dh.sha256' => $sha256,
+###
+###  SAMWEB does not know about sha256, so it does not accept this:
+###
+###                  'checksum' => [ "sha256:$sha256" ],
+    };
+
+    my $jstext = to_json($jsstruct);
+
+    print localtime().": ",($dryrun ? "Would register " : "Registering "),
+    $fn->basename," in SAM\n"
+        if $verbosity;
+
+    print localtime().":\t", "JSON = $jstext\n" if $verbosity > 8;
+
+    $sw->declareFile($jstext, {verbosity=>$verbosity})
+        unless $dryrun;
+}
+
+#================================================================
+# Copies file to tape backed dCache and creates its SAM record.
+# Returns pathname of the dCache file.
+#
+# This method handles new files, and also tries to fix mess-ups, like
+# interrupted copies.
+
+sub upregFile($$) {
+    my ($sw, $srcfile) = @_;
+    print localtime().": Working on file $srcfile\n" if $verbosity;
+
+    my $dstfile = Mu2eFilename->parse(basename($srcfile))->abspathname('tape');
+    my $samrecord = $sw->getFileMetadata(basename($srcfile), {verbosity=>$verbosity, allowedFailCodes=>[404]});
+
+    if(-e $dstfile) {
+
+        my $srcsize = -s $srcfile;
+        my $dstsize = -s $dstfile;
+        if($srcsize == $dstsize) {
+            print localtime().": Destination file $dstfile already exists and is of the expected size ($dstsize).  Verifying the content...\n"
+                if $verbosity;
+
+            my $srcsum = Mu2eUtils::hexdigest($srcfile);
+            my $dstsum = Mu2eUtils::hexdigest($dstfile);
+
+            die localtime().": Error: sha256 checksum mismatch:\n\t$srcsum for $srcfile\n\t$dstsum for $dstfile"
+                if $srcsum ne $dstsum;
+
+            print localtime().": OK, file $srcfile is already in dCache, continuing...\n"
+                if $verbosity;
+
+            if(defined $samrecord) {
+                # This failure state would need to be pre-cooked.  We
+                # can't fail here by just using this script.
+                my $samsha = $samrecord->{'dh.sha256'};
+                die localtime().": Error: file $srcfile is in dCache as $dstfile, but its SAM record is wrong: sha256 = $samsha instead of $dstsum\n"
+                    unless $dstsum eq $samsha;
+
+                print localtime().": OK, file $srcfile is already registered in SAM, continuing...\n"
+                    if $verbosity;
+            }
+            else {
+                maybeRegisterFileInSAM($sw, $dstfile, $dstsum);
+            }
+        }
+        #----------------
+        else { #  there is $dstfile, but its size is wrong
+
+            if(defined $samrecord) {
+                die localtime().": Error: a different file with the same name already exists in dCache and SAM for $srcfile\n";
+            }
+            else {
+                print localtime().": Destination file $dstfile already exists but its size $dstsize != expected size $srcsize\n"
+                    if $verbosity;
+
+                die localtime().": Error: leftover file in dCache is larger than $srcfile - do not know what to do.\n"
+                    if $dstsize > $srcsize;
+
+
+                print localtime().": Will remove $dstfile and copy $srcfile over.\n"
+                    if $verbosity;
+
+                # The dCache file is is smaller than our input.
+                # Likely a leftover from an interrupted copy in a previous attempt.
+                # All "valid" files in dCache should be in SAM.
+                # This one is not, so it is safe to remove it.
+                die localtime().": Error unlinking $dstfile: $!\n"
+                    unless unlink $dstfile;
+
+                # We are back to the clean state now.
+                my $sha256 = $dryrun ?
+                    Mu2eUtils::hexdigest($srcfile) :
+                    writeFileTodCache($srcfile, $dstfile);
+
+                maybeRegisterFileInSAM($sw, $dstfile, $sha256);
+            }
+        }
+    }
+
+    #----------------
+    else { # No dstfile in dCache, should be a clean start
+
+        # This script creates SAM record only after a successful copy to dCache.
+        # Since we don't have $dstfile, there should be nothing in SAM from
+        # previous invocations of this script.
+        # Stop here if something else is going on.
+        die localtime().": Error: there is already a SAM record for $srcfile, but the file is not in dCache.\n"
+            if defined $samrecord;
+
+        # starting from a clean state: upload the file, then declare it to SAM
+        my $sha256 = $dryrun ?
+            Mu2eUtils::hexdigest($srcfile) :
+            writeFileTodCache($srcfile, $dstfile);
+
+        maybeRegisterFileInSAM($sw, $dstfile, $sha256);
+    }
+
+    return $dstfile;
+}
+
+#================================================================
+# Process command line opts.
+GetOptions(\%opt,
+           "verbosity=i",
+           "dry-run",
+           "help",
+           "samweb-help",
+           @{$sw->optSpec},
+    )
+    or die "\nError processing command line options.\n";
+
+if($opt{'help'} or $opt{'samweb-help'}) {
+    print usage();
+    exit 0;
+}
+
+die "What files(s) do you want to process? Try the --help option.\n" if ($#ARGV < 0);
+
+# make sure cmdline parameters make sense
+foreach my $file (@ARGV) {
+    Mu2eFilename->parse(basename($file));
+    die "Error: file $file is not readable\n"
+        unless -r $file;
+}
+
+$sw->authConfig();
+
+# file registration and upload
+my @filesToLabel;
+foreach my $file (@ARGV) {
+    upregFile($sw, $file);
+    push @filesToLabel, $file;
+}
+
+# wait for tape labels
+while(1) {
+    my @nextRound;
+    for my $srcfile (@filesToLabel) {
+        my $dstfile = Mu2eFilename->parse(basename($srcfile))->abspathname('tape');
+        my $tapeinfo = Mu2eUtils::getEnstoreInfo($dstfile);
+        if(defined $tapeinfo) {
+            print localtime().": Got tape label ",$tapeinfo->label," for $dstfile\n"
+                if $verbosity;
+
+            my $location = Mu2eUtils::makeSamLocation($dstfile, $tapeinfo);
+
+            # SAMWEB does not allow to add the same location twice, which is good.
+            # We don't check here if $location is already known before trying to add
+            # it; so it is possible for this script to fail in the next operation.
+            # But it is unlikely during the normal workflow - the previous
+            # attempt would have to be interrupted in the instant between the
+            # SAMWEB transaction is complete and the file is removed.
+
+            $sw->maybeAddLocationToSam(basename($dstfile), $location,
+                                       {dryrun=>$dryrun, verbosity=>$verbosity} );
+
+            if(!$dryrun) {
+                print localtime().": Removing $srcfile after successful upload\n"
+                    if $verbosity;
+
+                unlink $srcfile
+                    or warn localtime().": Warning: could not remove file $srcfile: $!\n";
+            }
+        }
+        else {
+            print localtime().": File $dstfile has no tape label yet.\n";
+            push @nextRound, $srcfile;
+        }
+    }
+    @filesToLabel = @nextRound;
+    last if !scalar(@filesToLabel);
+
+    if($dryrun) {
+        print localtime().": Not waiting for tape labels because --dry-run was requested.\n";
+        last;
+    }
+
+    print localtime().": waiting for $delay seconds before checking tape labels again.\n";
+    sleep $delay;
+}
+
+print localtime().": Done.\n" if $verbosity > 0;
+
+exit 0;
+
+#================================================================

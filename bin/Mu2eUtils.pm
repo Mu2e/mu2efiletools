@@ -56,6 +56,7 @@ sub queryBFID($) {
     return ( Mu2eEnstoreInfo->new(label=>$label, location_cookie=> $cookie), $file_info );
 }
 
+#================================================================
 sub filterLocationCookie($) {
     my ($fi) = @_;
     my $cookie = $fi->location_cookie;
@@ -64,6 +65,10 @@ sub filterLocationCookie($) {
     $fi->cookie,"' for a non-SFA file.";
     return Mu2eEnstoreInfo->new(label=>$fi->label, location_cookie=> 0 + $cookie);
 }
+
+#================================================================
+# getEnstoreInfo($filename) returns a Mu2eEnstoreInfo
+# if the file has a tape label, or undef.
 
 my $enstore_checked = 0;
 sub getEnstoreInfo($) {
