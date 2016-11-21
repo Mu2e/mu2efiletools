@@ -20,10 +20,14 @@ use Mu2eDSName;
 use lib dirname($0);
 use Mu2eSWI;
 
+my $default_dsowner = getpwuid($EFFECTIVE_USER_ID);
+$default_dsowner =~ s/^mu2epro$/mu2e/;
+
 my $sw = Mu2eSWI->new;
 
 my %opt = ( %{$sw->optDefaults},
             pathname=>1,
+            'dsowner' => $default_dsowner,
             help=>0,
     );
 
