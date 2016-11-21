@@ -22,7 +22,8 @@ use lib dirname($0);
 use Mu2eSWI;
 use Mu2eUtils;
 
-my $delay=15*60;
+my $defaultDelay=15*60;
+my $delay=$defaultDelay;
 my $verbosity=2;
 my $dryrun=0;
 
@@ -58,7 +59,8 @@ with incomplete SAM info, and possibly a damaged copy on tape.
 
 The supported options are
 
-    --delay=<int>         The interval between checking dCache for tape labels.
+    --delay=<int>         The interval, in seconds, between checking dCache
+                          for tape labels. The default is $defaultDelay.
 
     --verbosity=<int>     Verbosity level.  The default is 1.
 
