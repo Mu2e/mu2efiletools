@@ -34,7 +34,8 @@ sub jobTrackingDataset($$$) {
 }
 
 #================================================================
-sub printMissingJobs {
+sub printMissingJobs($) {
+    my ($loc) = @_;
     my $fclds = $opt{'fclds'};
     my $dsowner = $opt{'dsowner'};
     my $dsconf = $opt{'dsconf'};
@@ -45,7 +46,8 @@ sub printMissingJobs {
 
     my @fns = $sw->listFiles($query);
     for my $f (@fns) {
-        my $out = $opt{'pathname'} ?  Mu2eFilename->parse($f)->abspathname_disk() : $f;
+        my $out = $f;
+        $out = Mu2eFilename->parse($f)->abspathname($loc) if $loc;
         print $out, "\n";
     }
 }
@@ -102,17 +104,37 @@ foreach my $k ('fclds', 'dsowner', 'dsconf') {
     defined $opt{$k} or die "Error: --$k must be specified.  Try the --help option.\n";
 }
 
-# Check that fcl ds is in the standard location
-if($opt{'pathname'}) {
-    my $fclds = $opt{'fclds'};
-    my $dsdir = Mu2eDSName->parse($fclds)->absdsdir('disk');
-    die "Error: fcl dataset $fclds is not found in the standard location $dsdir\n"
-       ."You can rerun with the --nopathname option to get a list of fcl files"
-       ." without their pathnames for your query.\n"
-    unless -d $dsdir;
+my $fclds=$opt{'fclds'};
+
+# Check for typos in fclds name
+my @fns = $sw->listFiles("dh.dataset=$fclds with availability anylocation limit 1");
+if(scalar(@fns) == 0) {
+    print STDERR "No files with dh.dataset=$fclds are registered in SAM.\n";
+    exit 1;
 }
 
-printMissingJobs();
+# Check that fcl ds is in the standard location
+my $loc = '';
+if($opt{'pathname'}) {
+    my $diskdir    = Mu2eDSName->parse($fclds)->absdsdir('disk');
+    my $scratchdir = Mu2eDSName->parse($fclds)->absdsdir('scratch');
+    if(-d $diskdir) {
+        $loc = 'disk';
+    }
+    elsif(-d $scratchdir)  {
+        $loc = 'scratch';
+    }
+    else {
+        die "Error: fcl dataset $fclds is not found in the standard locations\n"
+            ."$diskdir\n"
+            ."or\n"
+            ."$scratchdir\n"
+            ."You can rerun with the --nopathname option to get a list of fcl files"
+            ." without their pathnames for your query.\n"
+    }
+}
+
+printMissingJobs($loc);
 
 exit 0;
 
