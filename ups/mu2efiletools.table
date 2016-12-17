@@ -10,3 +10,19 @@ Action=setup
    SetupRequired( mu2efilename )
    SetupRequired( encp -q stken )
    pathPrepend(PATH, ${UPS_PROD_DIR}/bin)
+   #
+   # SLF update from 6.4 to 6.8 replacess
+   # perl-libwww-perl-5.833-2.el6.noarch with
+   # perl-libwww-perl-5.833-3.el6.noarch
+   #
+   # this "no change" brings a bunch of new options in "perldoc
+   # LWP::UserAgent", including control of what SSL implementation to
+   # use.  The new preference is IO::Socket::SSL, but with that we get
+   # errors like:
+   #
+   # $ ls cnf.gandr.my-reco-test.v0.004001_00000004.fcl.json |mu2eFileDeclare
+   # Got 500 Can't connect to samweb.fnal.gov:8483 (SSL connect attempt failed because of handshake problemserror:14094410:SSL routines:SSL3_READ_BYTES:sslv3 alert handshake failure) on Fri Dec 16 16:16:12 2016
+   #
+   # a quick workaround is to switch back to Net::SSL
+   #
+   envSetIfNotSet(PERL_NET_HTTPS_SSL_SOCKET_CLASS, Net::SSL)
