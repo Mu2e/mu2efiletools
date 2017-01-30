@@ -12,7 +12,7 @@ Install the product
 
 A complete example of CVMFS installation
 
-   ssh cvmfsmu2e@oasiscfs02.fnal.gov
+   ssh cvmfsmu2e@oasiscfs.fnal.gov
    cvmfs_server transaction mu2e.opensciencegrid.org
    cd /cvmfs/mu2e.opensciencegrid.org/artexternals
    export prod_db=`pwd`
