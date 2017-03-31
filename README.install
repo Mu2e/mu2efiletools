@@ -15,8 +15,12 @@ A complete example of CVMFS installation
    ssh cvmfsmu2e@oasiscfs.fnal.gov
    cvmfs_server transaction mu2e.opensciencegrid.org
    cd /cvmfs/mu2e.opensciencegrid.org/artexternals
-   export prod_db=`pwd`
-   source ./setup
+
+   ### export prod_db=`pwd`
+   ### source ./setup
+   source /cvmfs/fermilab.opensciencegrid.org/products/common/etc/setups
+   setup mu2e
+
    ver=v0_2
    tar xvf /grid/fermiapp/mu2e/users/gandr/dev/mu2efiletools-$ver.tgz
    ups list -aK+ mu2efiletools
