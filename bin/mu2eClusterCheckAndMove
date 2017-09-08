@@ -443,16 +443,6 @@ sub processJobDir($$$) {
             last CHECK;
         }
 
-        # make sure the .log.json file is there.
-        # this is the only check we can do on that file, because it is not
-        # listed in the manifest
-        my $logJsonFileName = $logFileName . ".json";
-        if(not -s $logJsonFileName) {
-            print "\tNo valid .log.json file in $jobdir\n" if $verbosity;
-            moveFailedJob($jobdir, $dsttop, DATASIZE());
-            last CHECK;
-        }
-
         my $loginfo = processLogFile($logFileName);
 
         if(not defined $loginfo->payload_ok) {
@@ -473,23 +463,9 @@ sub processJobDir($$$) {
         }
 
         # Look at the files listed in the manifest:
-        # Make sure each file is paired with its json
         my $jsonpattern = '\.json$';
         my @contentFiles = grep { ! /$jsonpattern/ } keys %{$loginfo->workerFileDigest};
         my @metaFiles = grep {  /$jsonpattern/ } keys %{$loginfo->workerFileDigest};
-        if($#contentFiles != $#metaFiles) {
-            print "\tNumber of content and json files does not agree for $jobdir\n" if $verbosity;
-            moveFailedJob($jobdir, $dsttop, METAPAIRED());
-            last CHECK;
-        }
-        foreach my $f (@contentFiles) {
-            my $found = grep { m"$f.json" } @metaFiles;
-            if(!$found) {
-                print "\tNumber of content and json files does not agree for $jobdir\n" if $verbosity;
-                moveFailedJob($jobdir, $dsttop, METAPAIRED());
-                last CHECK;
-            }
-        }
 
         # Verify integrity of files listed in the manifest:
         foreach my $fn (keys %{$loginfo->workerFileDigest}) {
@@ -505,7 +481,7 @@ sub processJobDir($$$) {
             # so we don't do it here by default.  Json files are never
             # uploaded (and are small).   The checkAndMove step is a good
             # place to verify them.
-            if($opt{'verify-data'} or $fn =~ /\.json$/) {
+            if($opt{'verify-data'} or $fn =~ /$jsonpattern/) {
                 if(!verifyDigest($jobdir.'/'.$fn, $loginfo->workerFileDigest($fn))) {
                     print "\tDigest mismatch for $jobdir/$fn\n" if $verbosity;
                     moveFailedJob($jobdir, $dsttop, DATACHECK());
