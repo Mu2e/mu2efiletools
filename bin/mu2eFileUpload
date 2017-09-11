@@ -25,9 +25,10 @@ use constant SCRATCH => 'scratch';
 
 my $dstarea; # tape, disk, or scratch
 my $forcecopy = 0;
+my $use_ifdh = 0;
 my $verbosity=1;
 my $dryrun=0;
-my %opt = ( copy=>\$forcecopy, verbosity=>\$verbosity, 'dry-run'=>\$dryrun, help=>0 );
+my %opt = ( copy=>\$forcecopy, ifdh=>\$use_ifdh, verbosity=>\$verbosity, 'dry-run'=>\$dryrun, help=>0 );
 
 # stat counters for the processing
 my $numCopied = 0;
@@ -91,7 +92,14 @@ sub processFile($) {
 
                 my $t1 = [gettimeofday()];
 
-                my $readcheck = Mu2eUtils::checked_copy($infile, $stdpath);
+                if($use_ifdh) {
+                    my @args = ('ifdh', 'cp', $infile, $stdpath);
+                    system(@args) == 0
+                        or die "system @args failed: $?\n"
+                }
+                else {
+                    Mu2eUtils::checked_copy($infile, $stdpath);
+                }
 
                 my $elapsed = tv_interval($t1);
 
@@ -154,6 +162,26 @@ The supported options are
                           the original.  The --copy option forces to alway
                           copy the files and leave the originals in place.
 
+    --ifdh                Use 'ifdh cp' to copy files, if a copy is needed.
+
+                          By default data are copied using normal filesystem
+                          read/write calls (means using the NFS protocol of
+                          dCache).  A checksum of the bytes written to dCache is
+                          computed on-the-fly, and compared to dCache-computed
+                          checksum after the copy is complete.  We have seen
+                          this check catching data corruption in several cases.
+                          This check detects data corruption before the original
+                          file is deleted, and stops the process, giving the user
+                          an option to clean up and re-try the upload.
+
+                          With the --ifdh option this check is not performed, as
+                          the actual copy is delegated to the external command.
+                          In case of data corruption on write, the file will be
+                          lost.  It is the user\'s responsibility to make sure
+                          that the ifdh command is set up and available in PATH,
+                          and that it has appropriate authentication
+                          proxies/tokens available.
+
     --verbosity=<int>     Verbosity level.  The default is 1.
 
     --dry-run             Do not copy the files, just count and report.
@@ -171,6 +199,7 @@ GetOptions(\%opt,
            "disk",
            "scratch",
            "copy",
+           "ifdh",
            "verbosity=i",
            "dry-run",
            "help",
@@ -207,7 +236,8 @@ while(my $line = <STDIN>) {
 }
 my $totalElapsed = tv_interval($tScriptStart);
 
-print "Summary: copied $numCopied and moved $numMoved files in $totalElapsed seconds.\n";
+my $alg = $use_ifdh ? "(with ifdh)" : "";
+print "Summary: copied $alg $numCopied and moved $numMoved files in $totalElapsed seconds.\n";
 if($totalCopyTime > 0.1) {
     my $sz = pretty_print_bytes($totalCopiedBytes);
     my $throughput = sprintf "%.2f MiB/s", $totalCopiedBytes/1024./1024./$totalCopyTime;
