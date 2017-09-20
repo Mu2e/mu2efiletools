@@ -239,6 +239,53 @@ sub upregFile($$) {
     return $dstfile;
 }
 
+
+#================================================================
+# Obtains tape labels for given files, adds them to SAM, then deletes
+# the original files.  The return value is a list of (original) files
+# that do not yet have tape labels.
+#
+
+sub maybe_finalize($$) {
+    my ($sw, $origFiles) = @_;
+
+    my @nextRound;
+    for my $srcfile (@$origFiles) {
+        my $dstfile = Mu2eFilename->parse(basename($srcfile))->abspathname('tape');
+        my $tapeinfo = Mu2eUtils::getEnstoreInfo($dstfile);
+        if(defined $tapeinfo) {
+            print localtime().": Got tape label ",$tapeinfo->label," for $dstfile\n"
+                if $verbosity;
+
+            my $location = Mu2eUtils::makeSamLocation($dstfile, $tapeinfo);
+
+            # SAMWEB does not allow to add the same location twice, which is good.
+            # We don't check here if $location is already known before trying to add
+            # it; so it is possible for this script to fail in the next operation.
+            # But it is unlikely during the normal workflow - the previous
+            # attempt would have to be interrupted in the instant between the
+            # SAMWEB transaction is complete and the file is removed.
+
+            $sw->maybeAddLocationToSam(basename($dstfile), $location,
+                                       {dryrun=>$dryrun, verbosity=>$verbosity} );
+
+            if(!$dryrun) {
+                print localtime().": Removing $srcfile after successful upload\n"
+                    if $verbosity;
+
+                unlink $srcfile
+                    or warn localtime().": Warning: could not remove file $srcfile: $!\n";
+            }
+        }
+        else {
+            print localtime().": File $dstfile has no tape label yet.\n";
+            push @nextRound, $srcfile;
+        }
+    }
+
+    return @nextRound;
+}
+
 #================================================================
 # Process command line opts.
 GetOptions(\%opt,
@@ -271,44 +318,11 @@ my @filesToLabel;
 foreach my $file (@ARGV) {
     upregFile($sw, $file);
     push @filesToLabel, $file;
+    @filesToLabel = maybe_finalize($sw, \@filesToLabel);
 }
 
 # wait for tape labels
 while(1) {
-    my @nextRound;
-    for my $srcfile (@filesToLabel) {
-        my $dstfile = Mu2eFilename->parse(basename($srcfile))->abspathname('tape');
-        my $tapeinfo = Mu2eUtils::getEnstoreInfo($dstfile);
-        if(defined $tapeinfo) {
-            print localtime().": Got tape label ",$tapeinfo->label," for $dstfile\n"
-                if $verbosity;
-
-            my $location = Mu2eUtils::makeSamLocation($dstfile, $tapeinfo);
-
-            # SAMWEB does not allow to add the same location twice, which is good.
-            # We don't check here if $location is already known before trying to add
-            # it; so it is possible for this script to fail in the next operation.
-            # But it is unlikely during the normal workflow - the previous
-            # attempt would have to be interrupted in the instant between the
-            # SAMWEB transaction is complete and the file is removed.
-
-            $sw->maybeAddLocationToSam(basename($dstfile), $location,
-                                       {dryrun=>$dryrun, verbosity=>$verbosity} );
-
-            if(!$dryrun) {
-                print localtime().": Removing $srcfile after successful upload\n"
-                    if $verbosity;
-
-                unlink $srcfile
-                    or warn localtime().": Warning: could not remove file $srcfile: $!\n";
-            }
-        }
-        else {
-            print localtime().": File $dstfile has no tape label yet.\n";
-            push @nextRound, $srcfile;
-        }
-    }
-    @filesToLabel = @nextRound;
     last if !scalar(@filesToLabel);
 
     if($dryrun) {
@@ -318,6 +332,7 @@ while(1) {
 
     print localtime().": waiting for $delay seconds before checking tape labels again.\n";
     sleep $delay;
+    @filesToLabel = maybe_finalize($sw, \@filesToLabel);
 }
 
 print localtime().": Done.\n" if $verbosity > 0;
