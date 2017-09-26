@@ -33,13 +33,13 @@ sub processJobDir {
         ## --json vs --nojson
         if($json) {
             next if $fn !~ s/\.json$//;
-            my $pfn = Mu2eFilename->parse($fn);
-            print "$jobdir/$fn.json\n" if($pfn->dataset->dsname eq $dsname);
+            my $pfn = Mu2eFilename->parse($fn, {nothrow=>1});
+            print "$jobdir/$fn.json\n"  if(defined $pfn and $pfn->dataset->dsname eq $dsname);
         }
         else {
             next if $fn =~ /\.json$/;
-            my $pfn = Mu2eFilename->parse($fn);
-            print "$jobdir/$fn\n" if($pfn->dataset->dsname eq $dsname);
+            my $pfn = Mu2eFilename->parse($fn, {nothrow=>1});
+            print "$jobdir/$fn\n" if(defined $pfn and $pfn->dataset->dsname eq $dsname);
         }
     }
 }
