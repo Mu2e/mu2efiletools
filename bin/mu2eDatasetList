@@ -1,0 +1,164 @@
+#!/usr/bin/perl -w
+#
+# Lists files in a Mu2e dataset.
+#
+# A.Gaponenko, 2016
+#
+
+use strict;
+use English '-no_match_vars';
+use Getopt::Long;
+use Digest;
+use LWP::UserAgent;
+use HTTP::Status qw(:constants);
+use File::Basename;
+use Data::Dumper;
+use Mu2eDSName;
+use Mu2eFNBase;
+
+use lib dirname($0);
+use Mu2eSWI;
+
+my $sw = Mu2eSWI->new;
+my %opt = ( help=>0, all=>0, %{$sw->optDefaults} );
+
+my @dsfields = ('tier', 'owner', 'description', 'configuration', 'format');
+
+#================================================================
+sub does_match {
+    my ($val, $str) = @_;
+    return 1 unless defined $str;
+    if($str =~ /^[\w-]+$/) {
+        # fixed string
+        return $val eq $str;
+    }
+    else {
+        return $val =~ /$str/;
+    }
+    return 0;
+}
+
+#================================================================
+
+sub printDatasetList($) {
+    my ($opt) = @_;
+
+    my @res = $sw->listDefinitions;
+
+    foreach my $ds (@res) {
+        my $dsn = Mu2eDSName->parse($ds, {nothrow=>1});
+        next unless defined $dsn;
+
+        next unless does_match($dsn->tier, $opt{'tier'});
+        next unless does_match($dsn->owner, $opt{'owner'});
+        next unless does_match($dsn->description, $opt{'description'});
+        next unless does_match($dsn->configuration, $opt{'configuration'});
+        next unless does_match($dsn->extension, $opt{'format'});
+
+        print $ds, "\n";
+    }
+    #print Dumper($sw),"\n";
+}
+
+#================================================================
+sub usage() {
+    my $self = basename($0);
+    return <<EOF
+Usage:
+    $self [options]
+
+Print out a sorted list of Mu2e datasets matching given criteria
+Options:
+
+    --all                       Print all datasets, without filtering.
+                                This conflicts with any of the following
+                                options.
+
+    --tier=<value>
+    --owner=<value>
+    --description=<value>
+    --configuration=<value>
+    --format=<value>
+
+                               Each of above options restricts the
+                               listing.  If the value contains only
+                               letters, digits, underscores and
+                               hyphens, a string comparison is used.
+                               Otherwise it is treated as a regular
+                               expression.  For example, --tier=sim
+                               and --tier='^sim\$' are equivalent.  See
+                               "man perlre" for details.
+
+    --std                      An abbreviation for --owner=mu2e
+    --standard                 An abbreviation for --owner=mu2e
+    --my                       An abbreviation for --owner=`whoami`
+
+EOF
+.
+# this is too much: . $sw->optDocString(' 'x8,' 'x5) .
+<<EOF
+
+    --help or -h               Print this message.
+
+EOF
+;
+}
+
+#================================================================
+# Process command line opts.
+
+GetOptions(\%opt,
+    "help",
+    "all",
+    "std|standard",
+    "my",
+    (map { $_ . '=s' } @dsfields),
+    @{$sw->optSpec}, )
+    or die "\nError processing command line options.\n";
+
+if($opt{'help'}) {
+    print usage();
+    exit 0;
+}
+
+die "ERROR: Unrecognized command line argument(s): @ARGV\n"
+    ."Try the --help option.\n"
+    unless $#ARGV < 0;
+
+die "Conflicting options: --std and --my\n"
+    if(defined $opt{'std'} and defined $opt{'my'});
+
+if(defined $opt{'std'}) {
+    die "Conflicting options: --std and --owner\n" if defined $opt{'owner'};
+    $opt{'owner'} = 'mu2e';
+}
+
+if(defined $opt{'my'}) {
+    die "Conflicting options: --my and --owner\n" if defined $opt{'owner'};
+    my $user = `whoami`;
+    chomp $user;
+    $opt{'owner'} = $user;
+}
+
+# Either --all or some other options must be requested.
+if($opt{'all'}) {
+    foreach my $x (@dsfields) {
+        die "Option --all conflicts with --$x\n"
+            if defined $opt{$x};
+    }
+}
+else {
+    # --all is not requested.  Is there any spec at all?
+    my $count = 0;
+    foreach my $x (@dsfields) {
+        ++$count if defined $opt{$x};
+    }
+    die "What datasets do you want to list?  Try the --help option.\n"
+    if($count == 0);
+}
+
+printDatasetList(\%opt);
+
+exit 0;
+
+#================================================================

@@ -284,6 +284,38 @@ sub listFiles {
 }
 
 #================================================================
+# SAM allows to  restrict the listing by user.
+# However in the Mu2e case dataset "owned" by some users
+# were registerd in SAM by mu2epro, so a server-side
+# select will not do the right thing.  We have to
+# get all the definitions and filter them by hand.
+sub listDefinitions {
+    my ($self, $inopts) = @_;
+    my $opts = $inopts // {};
+    my $verbosity = $$opts{'verbosity'} // 1;
+
+    my $url = URI->new( $self->read_server.'/sam/mu2e/api/definitions/list' );
+    $url->query_form( 'format' => 'plain');
+    my $res = $self->ua->get($url);
+    if($res->is_success) {
+        my @fns = split(/\n/, $res->content);
+        chomp(@fns);
+        return sort @fns;
+    }
+    else {
+        print STDERR "Dump of the server response:\n", Dumper($res),"\n\n"
+            if $verbosity > 1;
+
+        croak "Error: got server response ",
+        $res->status_line, ".\n",
+        $res->content, "\n",
+        "Stopping on ",
+        scalar(localtime()),
+        ".\n";
+    }
+}
+
+#================================================================
 sub describeDatasetDefinition {
     my ($self, $dsname) = @_;
     my $url = URI->new( $self->read_server.'/sam/mu2e/api/definitions/name/'.$dsname.'/describe' );
