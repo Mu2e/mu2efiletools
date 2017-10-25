@@ -26,12 +26,16 @@ my $defaultDelay=15*60;
 my $delay=$defaultDelay;
 my $verbosity=2;
 my $dryrun=0;
+my $nowait=0;
+
+my %dsnames;  # dataset names for all uploaded files
 
 my $sw = Mu2eSWI->new;
 my %opt = (
     delay=>\$delay,
     verbosity=>\$verbosity,
     'dry-run'=>\$dryrun,
+    'nowait' => \$nowait,
     help=>0,
     %{$sw->optDefaults},
     );
@@ -61,6 +65,12 @@ The supported options are
 
     --delay=<int>         The interval, in seconds, between checking dCache
                           for tape labels. The default is $defaultDelay.
+
+    --nowait              Do not wait for files to be written to tape,
+                          delete them immediately after copying into dCache.
+                          If this option is used one must run
+                          mu2eDatasetLocation --add=tape on the
+                          uploaded datasets later to set tape labels in SAM.
 
     --verbosity=<int>     Verbosity level.  The default is 1.
 
@@ -137,6 +147,9 @@ sub maybeRegisterFileInSAM($$$) {
 
     $sw->declareFile($jstext, {verbosity=>$verbosity})
         unless $dryrun;
+
+    # store the dataset name
+    ++$dsnames{$fn->dataset->dsname};
 }
 
 #================================================================
@@ -251,35 +264,45 @@ sub maybe_finalize($$) {
 
     my @nextRound;
     for my $srcfile (@$origFiles) {
-        my $dstfile = Mu2eFilename->parse(basename($srcfile))->abspathname('tape');
-        my $tapeinfo = Mu2eUtils::getEnstoreInfo($dstfile);
-        if(defined $tapeinfo) {
-            print localtime().": Got tape label ",$tapeinfo->label," for $dstfile\n"
-                if $verbosity;
-
-            my $location = Mu2eUtils::makeSamLocation($dstfile, $tapeinfo);
-
-            # SAMWEB does not allow to add the same location twice, which is good.
-            # We don't check here if $location is already known before trying to add
-            # it; so it is possible for this script to fail in the next operation.
-            # But it is unlikely during the normal workflow - the previous
-            # attempt would have to be interrupted in the instant between the
-            # SAMWEB transaction is complete and the file is removed.
-
-            $sw->maybeAddLocationToSam(basename($dstfile), $location,
-                                       {dryrun=>$dryrun, verbosity=>$verbosity} );
-
+        if($nowait) {
             if(!$dryrun) {
                 print localtime().": Removing $srcfile after successful upload\n"
                     if $verbosity;
-
                 unlink $srcfile
                     or warn localtime().": Warning: could not remove file $srcfile: $!\n";
             }
         }
         else {
-            print localtime().": File $dstfile has no tape label yet.\n";
-            push @nextRound, $srcfile;
+            my $dstfile = Mu2eFilename->parse(basename($srcfile))->abspathname('tape');
+            my $tapeinfo = Mu2eUtils::getEnstoreInfo($dstfile);
+            if(defined $tapeinfo) {
+                print localtime().": Got tape label ",$tapeinfo->label," for $dstfile\n"
+                    if $verbosity;
+
+                my $location = Mu2eUtils::makeSamLocation($dstfile, $tapeinfo);
+
+                # SAMWEB does not allow to add the same location twice, which is good.
+                # We don't check here if $location is already known before trying to add
+                # it; so it is possible for this script to fail in the next operation.
+                # But it is unlikely during the normal workflow - the previous
+                # attempt would have to be interrupted in the instant between the
+                # SAMWEB transaction is complete and the file is removed.
+
+                $sw->maybeAddLocationToSam(basename($dstfile), $location,
+                                           {dryrun=>$dryrun, verbosity=>$verbosity} );
+
+                if(!$dryrun) {
+                    print localtime().": Removing $srcfile after successful upload\n"
+                        if $verbosity;
+
+                    unlink $srcfile
+                        or warn localtime().": Warning: could not remove file $srcfile: $!\n";
+                }
+            }
+            else {
+                print localtime().": File $dstfile has no tape label yet.\n";
+                push @nextRound, $srcfile;
+            }
         }
     }
 
@@ -290,6 +313,7 @@ sub maybe_finalize($$) {
 # Process command line opts.
 GetOptions(\%opt,
            "verbosity=i",
+           "nowait",
            "dry-run",
            "help",
            "samweb-help",
@@ -336,6 +360,14 @@ while(1) {
 }
 
 print localtime().": Done.\n" if $verbosity > 0;
+
+if($nowait) {
+    my @dn = keys %dsnames;
+    print "File locations on tape have NOT been addes to SAM because the --nowait option was requested.\n"
+        ."Please make sure they are recorded.  You can use\n\n\tmu2eDatasetLocation --add=tape @dn\n\n"
+        ."to record locations of the uploaded files.\n"
+        ;
+}
 
 exit 0;
 
