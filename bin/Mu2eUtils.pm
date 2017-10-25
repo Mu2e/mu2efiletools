@@ -181,7 +181,8 @@ sub checked_copy {
     my $readcheck = sprintf "ADLER32:%08x", $crc;
 
     my $dstcheck = dCacheChecksum($outfile);
-    die "Detected data corruption on write: dst checksum = $dstcheck != read checksum $readcheck\n"
+    die "Detected data corruption on write: dst checksum = $dstcheck != read checksum $readcheck,"
+        . " writing \"$outfile\" on ".localtime()."\n"
         if($dstcheck ne $readcheck);
 
     if(abs_path($infile) =~ m|^/pnfs|) {
