@@ -154,48 +154,96 @@ sub checked_copy {
 
     my $opts = $inopts // {};
     my $sha256 = $$opts{'sha256'};
+    my $maxtries = $$opts{'maxtries'} // 1;
 
-    my $dig = $sha256 ? Digest->new('SHA-256') : undef;
+    my $numtries = 0;
 
-    sysopen(my $in, $infile, O_RDONLY)
-        or die "Can not open input \"$infile\": $! on ".localtime()."\n";
+  COPYTRY:
+    while(1) {
+        ++$numtries;
 
-    sysopen(my $out, $outfile, O_WRONLY | O_EXCL | O_CREAT)
-        or die "Can not create output \"$outfile\": $! on ".localtime()."\n";
+        my $dig = $sha256 ? Digest->new('SHA-256') : undef;
 
-    my $blocksize = 4*1024*1024;
-    my ($rst, $crc);
-    while($rst = sysread($in, my $buf, $blocksize)) {
-        $crc = adler32($buf, $crc);
-        $dig->add($buf) if($dig);
-        syswrite($out, $buf)
-            or die "Error writing to \"$outfile\": $! on ".localtime()."\n";
+        sysopen(my $in, $infile, O_RDONLY)
+            or die "Can not open input \"$infile\": $! on ".localtime()."\n";
+
+        sysopen(my $out, $outfile, O_WRONLY | O_EXCL | O_CREAT)
+            or die "Can not create output \"$outfile\": $! on ".localtime()."\n";
+
+        my $blocksize = 4*1024*1024;
+        my ($rst, $crc);
+        while($rst = sysread($in, my $buf, $blocksize)) {
+            $crc = adler32($buf, $crc);
+            $dig->add($buf) if($dig);
+            if(not syswrite($out, $buf)) {
+                my $msg = "Error writing to \"$outfile\": $! on ".localtime()." (try $numtries)\n";
+                if($numtries < $maxtries) {
+                    warn $msg;
+                    # this check is racy, but still better than doing nothing
+                    die "The input file \"$infile\" is gone - stop now.\n" unless -r $infile;
+                    print localtime().": Removing file $outfile\n";
+                    unlink $outfile or die "Error unlinking \"$outfile\" on ".localtime().": $!\n";
+                    next COPYTRY;
+                }
+                else {
+                    die $msg;
+                }
+            }
+        }
+
+        die "Error reading \"$infile\": $! on ".localtime()."\n"
+            unless defined $rst;
+
+        if(not close $out) {
+            my $msg = "Error closing output \"$outfile\": $!  on ".localtime()." (try $numtries)\n";
+            if($numtries < $maxtries) {
+                warn $msg;
+                # this check is racy, but still better than doing nothing
+                die "The input file \"$infile\" is gone - stop now.\n" unless -r $infile;
+                print localtime().": Removing file $outfile\n";
+                unlink $outfile or die "Error unlinking \"$outfile\" on ".localtime().": $!\n";
+                next COPYTRY;
+            }
+            else {
+                die $msg;
+            }
+        }
+
+        close $in  or die "Error closing input \"$infile\": $!  on ".localtime()."\n";
+
+        my $readcheck = sprintf "ADLER32:%08x", $crc;
+
+        my $dstcheck = dCacheChecksum($outfile);
+        if($dstcheck ne $readcheck) {
+            my $msg = "Detected data corruption on write: dst checksum = $dstcheck != read checksum $readcheck,"
+                . " writing \"$outfile\" on ".localtime()."  (try $numtries)\n";
+
+            if($numtries < $maxtries) {
+                warn $msg;
+                # this check is racy, but still better than doing nothing
+                die "The input file \"$infile\" is gone - stop now.\n" unless -r $infile;
+                print localtime().": Removing file $outfile\n";
+                unlink $outfile or die "Error unlinking \"$outfile\" on ".localtime().": $!\n";
+                next COPYTRY;
+            }
+            else {
+                die $msg;
+            }
+        }
+
+        if(abs_path($infile) =~ m|^/pnfs|) {
+            my $srccheck = dCacheChecksum($infile);
+            die "Detected data corruption on read: read checksum = $readcheck != source checksum $srccheck\n"
+                if($srccheck ne $readcheck);
+        }
+
+        # the copy has succeeded
+        if($sha256) {
+            $$sha256 = $dig->hexdigest;
+        }
+
+        return $readcheck;
     }
-
-    die "Error reading \"$infile\": $! on ".localtime()."\n"
-        unless defined $rst;
-
-    close $out or die "Error closing output \"$outfile\": $!  on ".localtime()."\n";
-    close $in  or die "Error closing input \"$infile\": $!  on ".localtime()."\n";
-
-    my $readcheck = sprintf "ADLER32:%08x", $crc;
-
-    my $dstcheck = dCacheChecksum($outfile);
-    die "Detected data corruption on write: dst checksum = $dstcheck != read checksum $readcheck,"
-        . " writing \"$outfile\" on ".localtime()."\n"
-        if($dstcheck ne $readcheck);
-
-    if(abs_path($infile) =~ m|^/pnfs|) {
-        my $srccheck = dCacheChecksum($infile);
-        die "Detected data corruption on read: read checksum = $readcheck != source checksum $srccheck\n"
-            if($srccheck ne $readcheck);
-    }
-
-    if($sha256) {
-        $$sha256 = $dig->hexdigest;
-    }
-
-    return $readcheck;
 }
 
 #================================================================
