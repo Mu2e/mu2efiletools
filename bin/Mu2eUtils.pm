@@ -154,6 +154,11 @@ sub checked_copy {
 
     my $opts = $inopts // {};
     my $sha256 = $$opts{'sha256'};
+
+    # !!! DANGER !!!  with maxtries > 1 the /pnfs file is deleted before a retry.
+    # If an upload process gets stuck on /pnfs I/O and another script puts the same
+    # file in, then the first process gets "unstuck" with an I/O error, the file will
+    # be lost!
     my $maxtries = $$opts{'maxtries'} // 1;
 
     my $numtries = 0;
