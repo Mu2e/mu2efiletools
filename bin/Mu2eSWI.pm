@@ -144,6 +144,15 @@ sub authConfig {
 
         $ENV{'HTTPS_CERT_FILE'} = $filename;
         $ENV{'HTTPS_KEY_FILE'} = $filename;
+
+        # Per Ray's e-mail 2018-03-30 the addition of the following
+        # two vars fixes the SSL connection problem for proxies that
+        # have a numeric CN at the end, like
+        #
+        # subject   : /DC=org/DC=cilogon/C=US/O=Fermi National Accelerator Laboratory/OU=People/CN=Andrei Gaponenko/CN=UID:gandr/CN=2547906578
+
+        $ENV{'HTTPS_CA_FILE'} = $filename unless defined $ENV{'HTTPS_CA_FILE'};
+        $ENV{'HTTPS_CA_DIR'} = '/etc/grid-security/certificates' unless defined $ENV{'HTTPS_CA_DIR'};
     }
     elsif($numvars == 1) {
         croak "Error: either both or none of HTTPS_CERT_FILE, HTTPS_KEY_FILE environment variables should be defined.\n";

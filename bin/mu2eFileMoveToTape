@@ -107,7 +107,12 @@ sub writeFileTodCache($$) {
         make_path($outdir);
         -d $outdir or die "Error creating directory path $outdir: $! on ".localtime()."\n";
 
-        Mu2eUtils::checked_copy($srcfile, $dstfile, {'sha256'=>\$sha256});
+        # FIXME: make maxtries an option
+        # !!! DANGER !!!  with maxtries > 1 the /pnfs file is deleted before a retry.
+        # If an upload process gets stuck on /pnfs I/O and another script puts the same
+        # file in, then the first process gets "unstuck" with an I/O error, the file will
+        # be lost!
+        Mu2eUtils::checked_copy($srcfile, $dstfile, {'sha256'=>\$sha256, 'maxtries'=>3});
     }
 
     return $sha256;
