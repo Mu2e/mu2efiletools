@@ -110,6 +110,7 @@ sub getEnstoreInfo($) {
 }
 
 #================================================================
+# Returns a dCache-computed checksum.  The file must be in /pnfs.
 sub dCacheChecksum($) {
     my $fn = shift;
     my $ckn = dirname($fn) . '/.(get)('.basename($fn).')(checksum)';
@@ -143,9 +144,41 @@ sub dCacheChecksum($) {
 }
 
 #================================================================
+# Returns the dCache-style checksum by querying dCache or reading
+# the file and computing the sum for files outside of dCache.
+sub adler32Checksum($) {
+    my $infile = shift;
+
+    my $res;
+    if(abs_path($infile) =~ m|^/pnfs|) {
+        $res = dCacheChecksum($infile);
+    }
+    else {
+        sysopen(my $in, $infile, O_RDONLY)
+            or die "Can not open input \"$infile\": $! on ".localtime()."\n";
+
+        my $blocksize = 4*1024*1024;
+        my ($rst,$crc);
+        while($rst = sysread($in, my $buf, $blocksize)) {
+            $crc = adler32($buf, $crc);
+        }
+        die "Error reading \"$infile\": $! on ".localtime()."\n"
+            unless defined $rst;
+
+        close $in  or die "Error closing input \"$infile\": $!  on ".localtime()."\n";
+
+        $res = sprintf "ADLER32:%08x", $crc;
+    }
+
+    return $res;
+}
+
+#================================================================
 # Copies $infile to an $outfile on /pnfs, computing an adler32
 # checksum on bytes in transit.  The checksum is compared against
 # dCache-computed value for $outfile, and, if available, for $infile.
+# If the 'sha256' option is requested, a sha256 checksum will also
+# be computed and stored in the variable pointed to by the option.
 #
 # A pre-requisite: the destination directory must exist.
 #
@@ -249,6 +282,31 @@ sub checked_copy {
 
         return $readcheck;
     }
+}
+
+#================================================================
+# Copy $infile to an $outfile on /pnfs using "ifdh cp".
+# Die if dCache style adler32 checksum of the destination file
+# does not match that of the source.
+#
+# A pre-requisite: the destination directory must exist.
+#
+sub ifdh_copy {
+    my ($infile, $outfile, $inopts) = @_;
+
+
+    my $srccheck = adler32Checksum($infile);
+
+    my @args = ('ifdh', 'cp', $infile, $outfile);
+    system(@args) == 0
+        or die "ifdh_copy: system @args failed: $?\n";
+
+    my $dstcheck = adler32Checksum($outfile);
+
+    die "Detected data corruption during 'ifdh cp': dst checksum $dstcheck != source checksum $srccheck\n"
+        if($srccheck ne $dstcheck);
+
+    return $dstcheck;
 }
 
 #================================================================

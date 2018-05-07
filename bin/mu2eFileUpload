@@ -93,9 +93,7 @@ sub processFile($) {
                 my $t1 = [gettimeofday()];
 
                 if($use_ifdh) {
-                    my @args = ('ifdh', 'cp', $infile, $stdpath);
-                    system(@args) == 0
-                        or die "system @args failed: $?\n"
+                    Mu2eUtils::ifdh_copy($infile, $stdpath);
                 }
                 else {
                     Mu2eUtils::checked_copy($infile, $stdpath);
