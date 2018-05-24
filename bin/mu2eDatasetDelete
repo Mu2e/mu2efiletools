@@ -146,6 +146,32 @@ sub deleteDataset($) {
         if(-e $dsdir) {
             if($target{$t}) {
                 $have_work = 1;
+
+                # A kludge for legacy datasets.  Initially the  ff/ff "spreader" directories were
+                # put directly in the "dataset version" directory, like
+                #
+                # /pnfs/mu2e/persistent/datasets/phy-sim/sim/mu2e/cd3-beam-g4s3-tgtstops/v533_v543_v563
+                #
+                # The current convension is that the "dataset directory should be
+                #
+                # /pnfs/mu2e/persistent/datasets/phy-sim/sim/mu2e/cd3-beam-g4s3-tgtstops/v533_v543_v563/art
+                #
+                # Old datasets were patched by hand by creatins a symlink ("art" above) pointing to
+                # the containing directory.
+                # To delete such a patched dataset, we need to step up one level.
+                # Theoretically this is not safe and may delete some other stuff besides the dataset
+                # in question.  This should not happen in practice, because so far we do not have
+                # any datasets that differ from each other only in file extension.
+
+                if(-l $dsdir) {
+                    my $oneup = dirname($dsdir);
+                    print "WARNING: $dsdir is a symbolic link.  Looks like a legacy dataset patched by hand.\n"
+                        . "Will delete the containing directory $oneup\n"
+                        . "Confirm only if you are confident this is the right thing to do.\n"
+                        ;
+                    $dsdir = $oneup;
+                }
+
                 print +($proceed ? "Deleting" : "Will delete"), " files in $dsdir\n";
                 if($proceed) {
                     my $err;
