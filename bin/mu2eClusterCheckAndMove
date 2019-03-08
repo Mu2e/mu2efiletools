@@ -203,6 +203,10 @@ sub processLogFile($) {
                 $job_stats->site($1);
             }
 
+            if($line =~ m/^SLURM_CLUSTER_NAME *= *(.*)$/) {
+                $job_stats->site($1);
+            }
+
             if($manifest_started) {
                 if($line =~ m/^#/) {
                     # extract file size information from the "ls -l" output
