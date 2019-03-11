@@ -386,13 +386,10 @@ sub isGlobalDup($$$) {
 
                      'job.cpu' => int(0.5+$st->cpu),
                      'job.maxres' => $st->maxres,
+                     'job.disk' => $st->disk,
                      'job.node' => $st->node,
                      'job.site' => $st->site,
     };
-
-    if(defined $st->disk) {
-        $$jsstruct{'job.disk'} = $st->disk;
-    }
 
     my $json_text = to_json($jsstruct);
 
