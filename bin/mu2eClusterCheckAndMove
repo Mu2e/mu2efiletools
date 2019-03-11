@@ -369,6 +369,14 @@ sub isGlobalDup($$$) {
 
     my $st = $loginfo->job_stats;
 
+    # Make sure all fields in $st are defined.  Do not try to send
+    # empty strings to SAM DB.
+    my $cnt=0;
+    foreach my $i (@{$st}) {
+        defined $i or die "Error; Mu2eJobStats field $cnt not defined for $logFileName\n";
+        ++$cnt;
+    }
+
     my $jsstruct = { data_tier => 'job',
                      file_name => $jtfn,
                      file_size => 0,
