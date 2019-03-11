@@ -150,6 +150,9 @@ sub processLogFile($) {
     my $art_status_ok = 0;
     my $manifest_selfhash='';
 
+    my $cobalt_manager = 0; # COBALT batch system does not provide a site name, we'll need to guess.
+    my $maybe_theta = 0;  # Theta is a site that uses the COBALT system.
+
     # Note: dynamic determination of hash alg would need two passes over $logFileName
     # We've always been using sha256sum on worker nodes
     my $loghash = Digest->new('SHA-256');
@@ -207,6 +210,14 @@ sub processLogFile($) {
                 $job_stats->site($1);
             }
 
+            if($line =~ m/^COBALT_QUEUE/) {
+                $cobalt_manager = 1;
+            }
+
+            if($line =~ m/^HOST=theta/i) {
+                $maybe_theta = 1;
+            }
+
             if($manifest_started) {
                 if($line =~ m/^#/) {
                     # extract file size information from the "ls -l" output
@@ -250,6 +261,14 @@ sub processLogFile($) {
         }
 
         my $payload_ok = $mu2egrid_status_ok && $art_status_ok;
+
+        if(!defined($job_stats->site)) {
+            if($cobalt_manager) {
+                if($maybe_theta) {
+                    $job_stats->site('theta');
+                }
+            }
+        }
 
         return Mu2eLogFileInfo->new(manifest_selfhash=>$manifest_selfhash,
                                     logfilehash=>$loghash->hexdigest,
