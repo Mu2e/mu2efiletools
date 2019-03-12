@@ -131,11 +131,16 @@ sub verifyDigest($$) {
 
     my $ret = 0;
 
-    if(open(my $fh, '<', $fn)) {
-        $dig->addfile($fh);
-        if($dig->hexdigest eq $expectedDigest) {
-            $ret = 1;
-        }
+    # A stat() has just succeeded on the file.  It it is not readable
+    # we break here instead of classifying the job as a failure.  Such
+    # misclassification was seen in --dry-run tests because of wrong
+    # permissions after coping files from another system.
+
+    open(my $fh, '<', $fn) or die "Error opening file '$fn': $!\n";
+
+    $dig->addfile($fh);
+    if($dig->hexdigest eq $expectedDigest) {
+        $ret = 1;
     }
 
     return $ret;
