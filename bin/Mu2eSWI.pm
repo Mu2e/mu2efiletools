@@ -136,33 +136,32 @@ sub authConfig {
     my $numvars = (defined $ENV{'HTTPS_CERT_FILE'} ? 1 : 0)
         + (defined $ENV{'HTTPS_KEY_FILE'} ? 1 : 0);
 
-    if($numvars == 0) {
-        my $filename = '/tmp/x509up_u'.$EUID;
-        die "Error: no HTTPS_KEY_FILE and HTTPS_CERT_FILE in the environment, and file $filename does not exist.\n"
-            ."Run kx509 and try again.\n"
-            unless -r $filename;
-
-        $ENV{'HTTPS_CERT_FILE'} = $filename;
-        $ENV{'HTTPS_KEY_FILE'} = $filename;
-
-        # Per Ray's e-mail 2018-03-30 the addition of the following
-        # two vars fixes the SSL connection problem for proxies that
-        # have a numeric CN at the end, like
-        #
-        # subject   : /DC=org/DC=cilogon/C=US/O=Fermi National Accelerator Laboratory/OU=People/CN=Andrei Gaponenko/CN=UID:gandr/CN=2547906578
-
-        $ENV{'HTTPS_CA_FILE'} = $filename unless defined $ENV{'HTTPS_CA_FILE'};
-        $ENV{'HTTPS_CA_DIR'} = '/etc/grid-security/certificates' unless defined $ENV{'HTTPS_CA_DIR'};
-    }
-    elsif($numvars == 1) {
+    if($numvars == 1) {
         croak "Error: either both or none of HTTPS_CERT_FILE, HTTPS_KEY_FILE environment variables should be defined.\n";
     }
-    else {
+    elsif($numvars == 2) {
         for my $name ('HTTPS_CERT_FILE', 'HTTPS_KEY_FILE') {
             croak "Error: the file $ENV{$name} specified  by environment variable $name is not readable.\n"
                 unless -r $ENV{$name};
         }
     }
+
+    my $filename = undef;
+    if($numvars == 0) {
+        $filename = '/tmp/x509up_u'.$EUID;
+        die "Error: no HTTPS_KEY_FILE and HTTPS_CERT_FILE in the environment, and file $filename does not exist.\n"
+            ."Run kx509 and try again.\n"
+            unless -r $filename;
+    }
+
+    $self->{'Mu2eSWI::_ua'} ->ssl_opts(
+        SSL_cert_file => $ENV{'HTTPS_CERT_FILE'} // $filename,
+        SSL_key_file => $ENV{'HTTPS_KEY_FILE'} // $filename,
+        SSL_ca_path =>  $ENV{'HTTPS_CA_DIR'}  // '/etc/grid-security/certificates',
+        # SSL_ca_file => $ENV{'HTTPS_CA_FILE'} // $filename,
+        );
+
+    #print "New ssl_opts: ", Dumper($self->{'Mu2eSWI::_ua'} ->ssl_opts), "\n";
 }
 
 #================================================================
