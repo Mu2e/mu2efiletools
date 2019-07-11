@@ -1,0 +1,19 @@
+#!/usr/bin/perl -w
+#
+
+use strict;
+use English '-no_match_vars';
+use File::Basename;
+
+use lib dirname($0);
+use Mu2eSWI;
+
+my $sw = Mu2eSWI->new;
+
+$sw->authConfig();
+
+$sw->testSSLConnection();
+
+exit 0;
+
+#================================================================

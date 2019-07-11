@@ -166,6 +166,28 @@ sub authConfig {
 }
 
 #================================================================
+sub testSSLConnection {
+    my ($self) = @_;
+
+    my $url = URI->new( $self->write_server.'/sam/mu2e/api/' );
+    $url->query_form( 'format' => 'plain');
+    my $res = $self->ua->get($url);
+    if($res->is_success) {
+        print $res->content, "\n";
+    }
+    else {
+        print STDERR "Dump of the server response:\n", Dumper($res),"\n\n";
+
+        croak "Error: got server response ",
+        $res->status_line, ".\n",
+        $res->content, "\n",
+        "Stopping on ",
+        scalar(localtime()),
+        ".\n";
+    }
+}
+
+#================================================================
 # The last argument is a reference to a hash.  The call behavior is
 # affected by the following keys, all of which are optional:
 #
