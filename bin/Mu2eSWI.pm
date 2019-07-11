@@ -158,12 +158,10 @@ sub authConfig {
         croak "Error: either both or none of HTTPS_CERT_FILE, HTTPS_KEY_FILE environment variables should be defined.\n";
     }
     else {
-        my $checkFiles = sub {
-            for my $name (@_) {
-                croak "Error: the file $ENV{$name} specified  by environment variable $name is not readable.\n"
-                    unless -r $ENV{$name};
-            }
-        };
+        for my $name ('HTTPS_CERT_FILE', 'HTTPS_KEY_FILE') {
+            croak "Error: the file $ENV{$name} specified  by environment variable $name is not readable.\n"
+                unless -r $ENV{$name};
+        }
     }
 }
 
