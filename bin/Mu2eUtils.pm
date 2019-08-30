@@ -80,10 +80,11 @@ sub getEnstoreInfo($) {
         $enstore_checked = 1;
     }
 
-    my $file_bfid = `enstore pnfs --bfid $pathname 2>/dev/null`;
-    if($? ne 0) {
-        return undef; # the file is not on tape yet.
-    }
+    my $l1fn = dirname($pathname) . '/.(use)(1)(' . basename($pathname) . ')';
+    open(my $FH, '<', $l1fn) or return undef; # not on tape yet
+    my $file_bfid = <$FH>;
+    die "Can not get BFID from pnfs layer 1  $l1fn: $! on ".localtime()."\n"
+        unless defined $file_bfid;
     chomp $file_bfid;
 
     my ($fi, $file_info) = queryBFID($file_bfid);
