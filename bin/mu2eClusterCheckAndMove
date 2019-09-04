@@ -186,7 +186,7 @@ sub processLogFile($) {
                 $parent_fcl = $1;
             }
 
-            if($line =~ m/^mu2egrid exit status 0$/) {
+            if($line =~ m/^mu2egrid exit status 0 ?.*$/) {
                 $mu2egrid_status_ok = 1;
             }
 
