@@ -1,0 +1,122 @@
+#!/usr/bin/perl -w
+#
+# A.Gaponenko, 2016
+#
+
+use strict;
+
+use English '-no_match_vars';
+use Getopt::Long;
+use LWP::UserAgent;
+use HTTP::Request::Common;
+use JSON;
+use File::Basename;
+use File::stat;
+use Cwd 'abs_path';
+use Time::HiRes qw(gettimeofday tv_interval);
+use Digest;
+use Mu2eDSName;
+use Data::Dumper;
+
+use lib dirname($0);
+use Mu2eSWI;
+
+my $verbosity=1;
+my $sw = Mu2eSWI->new;
+
+my %opt = ( verbosity=>\$verbosity,
+            help=>0,
+            %{$sw->optDefaults},
+    );
+
+# stat counters for the processing
+my $numFilesTotal = 0;
+my $numFilesProcessed = 0;
+my $genevents = 0;
+my $passedevents = 0;
+
+
+#================================================================
+sub processFile($$) {
+    my ($sw, $file) = @_;
+    ++$numFilesProcessed;
+
+    print "Working on $file\n";
+    my $js = $sw->getFileMetadata($file);
+    #print Dumper($js),"\n";
+
+    if (defined $js->{'dh.gencount'}) {
+        $genevents += $js->{'dh.gencount'};
+        $passedevents += $js->{'event_count'} // 0;
+    }
+    if($genevents) {
+        my $eff = $passedevents / $genevents ;
+        print "Processed $numFilesProcessed / $numFilesTotal files, eff = $eff  [ $passedevents / $genevents ]  on ",scalar(localtime()),"\n" if $verbosity > 0;
+    }
+}
+
+#================================================================
+sub processDataset {
+    my $dsname = shift;
+
+    # make sure cmdline parameters make sense
+    Mu2eDSName->parse($dsname);
+
+    my @fl = $sw->listFiles("dh.dataset=$dsname with availability anylocation");
+    $numFilesTotal = scalar(@fl);
+
+    if($numFilesTotal > 0) {
+        for my $file (@fl) {
+            processFile($sw, $file);
+        }
+    }
+    else {
+        print "No files in dataset $dsname. Nothing to do on ",
+        scalar(localtime()),".\n";
+    }
+}
+
+#================================================================
+sub usage() {
+    my $self = basename($0);
+    return <<EOF
+Compute and print out the overall filter effiency for a dataset,
+which is the ratio of the number of events in the dataset to
+the total number of events generated in the initial stage of the
+simulation, in the jobs that ran with the EmptyEvent source.
+
+Usage:
+        $self [options] <DatasetName>
+
+Options:
+EOF
+.  #$sw->optDocString(' 'x4, ' 'x7) .
+<<EOF
+
+    --help                  Print this message.
+EOF
+;
+}
+
+# Process command line opts.
+GetOptions(\%opt,
+           "help",
+           @{$sw->optSpec},
+           )
+    or die "\nError processing command line options.\n";
+
+if($opt{'help'}) {
+    print usage();
+    exit 0;
+}
+
+die "ERROR: Exactly one dataset name must be specified.  Try the --help option.\n"
+    unless $#ARGV >=  0;
+
+foreach my $ds (@ARGV) {
+    processDataset($ds);
+}
+
+exit 0;
+
+#================================================================
