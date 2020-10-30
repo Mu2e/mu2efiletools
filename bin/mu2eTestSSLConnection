@@ -10,10 +10,24 @@ use Mu2eSWI;
 
 my $sw = Mu2eSWI->new;
 
-$sw->authConfig();
+my $stan = $sw->testSSLConnection({'verbosity' => 0});
+print "Testing anonymous SSL connection: ", $stan ? "OK\n" : "Rejected\n";
 
-$sw->testSSLConnection();
+my $gotCredentials = eval { $sw->authConfig()  } // 0;
+if ($gotCredentials) {
+    # do not re-use the connection made before user auth
+    $sw->ua->conn_cache->drop();
+    print "\nTesting athenticated SSL connection\n";
+    print $sw->testSSLConnection({'verbosity' => 1}) ? "OK\n" : "Rejected\n";
+}
+else {
+    print<<EOF
 
-exit 0;
+User credentials are not available, not testing authenticated connection.
+Run kx509, or specify user key and cert files via HTTPS_KEY_FILE and
+HTTPS_CERT_FILE evnironment variables if auth is desired.
+EOF
+;
+}
 
-#================================================================
+exit !$stan;

@@ -149,7 +149,7 @@ sub authConfig {
     my $filename = undef;
     if($numvars == 0) {
         $filename = '/tmp/x509up_u'.$EUID;
-        die "Error: no HTTPS_KEY_FILE and HTTPS_CERT_FILE in the environment, and file $filename does not exist.\n"
+        croak "Error: no HTTPS_KEY_FILE and HTTPS_CERT_FILE in the environment, and file $filename does not exist.\n"
             ."Run kx509 and try again.\n"
             unless -r $filename;
     }
@@ -161,28 +161,27 @@ sub authConfig {
         # SSL_ca_file => $ENV{'HTTPS_CA_FILE'} // $filename,
         );
 
+
     #print "New ssl_opts: ", Dumper($self->{'Mu2eSWI::_ua'} ->ssl_opts), "\n";
+    return 1;
 }
 
 #================================================================
 sub testSSLConnection {
-    my ($self) = @_;
+    my ($self, $inopts) = @_;
+    my $opts = $inopts // {};
+    my $verbosity = $$opts{'verbosity'} // 0;
 
-    my $url = URI->new( $self->write_server.'/sam/mu2e/api/' );
+    my $url = URI->new( $self->write_server.'/sam/mu2e/api' );
     $url->query_form( 'format' => 'plain');
     my $res = $self->ua->get($url);
     if($res->is_success) {
-        print $res->content, "\n";
+        print $res->content, "\n" if $verbosity;
+        return 1;
     }
     else {
         print STDERR "Dump of the server response:\n", Dumper($res),"\n\n";
-
-        croak "Error: got server response ",
-        $res->status_line, ".\n",
-        $res->content, "\n",
-        "Stopping on ",
-        scalar(localtime()),
-        ".\n";
+        return 0;
     }
 }
 
