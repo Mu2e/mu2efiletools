@@ -34,8 +34,8 @@ sub optSpec {
     return [
         "delay=i",
         "maxtries=i",
-        "read-server=s",
-        "write-server=s",
+        "read_server=s",
+        "write_server=s",
         "timeout=i",
         ];
 }
@@ -64,10 +64,10 @@ sub optDocString {
     my $write_server = $df->write_server;
     my $timeout = $df->timeout;
     my $res = <<EOF
---read-server    Samweb server for querying. The default is
+--read_server    Samweb server for querying. The default is
                  $read_server
 
---write-server   Samweb server to write information to SAM.
+--write_server   Samweb server to write information to SAM.
                  The default is $write_server
 
                  If you intend to modify SAM database, run kx509
