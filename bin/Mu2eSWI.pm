@@ -22,8 +22,7 @@ use Data::Dumper;
 use Class::Struct Mu2eSWIFields =>
     { delay=>'$',
       maxtries=>'$',
-      read_server=>'$',
-      write_server=>'$',
+      samweb_server=>'$',
       timeout=>'$',
     };
 
@@ -34,8 +33,7 @@ sub optSpec {
     return [
         "delay=i",
         "maxtries=i",
-        "read_server=s",
-        "write_server=s",
+        "samweb_server=s",
         "timeout=i",
         ];
 }
@@ -60,15 +58,11 @@ sub optDocString {
     my $df = Mu2eSWI->new;
     my $delay = $df->delay;
     my $maxtries = $df->maxtries;
-    my $read_server = $df->read_server;
-    my $write_server = $df->write_server;
+    my $samweb_server = $df->samweb_server;
     my $timeout = $df->timeout;
     my $res = <<EOF
---read_server    Samweb server for querying. The default is
-                 $read_server
-
---write_server   Samweb server to write information to SAM.
-                 The default is $write_server
+--samweb_server  The samweb server to use. The default is
+                 $samweb_server
 
                  If you intend to modify SAM database, run kx509
                  to generate authentication files before running the
@@ -115,8 +109,8 @@ sub new {
     my $self = $class->SUPER::new(
         delay=>60,
         maxtries=>3,
-        read_server=>'http://samweb.fnal.gov:8480',
-        write_server=>'https://samweb.fnal.gov:8483',
+        samweb_server=>'http://samweb.fnal.gov:8480',
+        samweb_server=>'https://samweb.fnal.gov:8483',
         timeout => 3600,
         );
 
@@ -172,7 +166,7 @@ sub testSSLConnection {
     my $opts = $inopts // {};
     my $verbosity = $$opts{'verbosity'} // 0;
 
-    my $url = URI->new( $self->write_server.'/sam/mu2e/api' );
+    my $url = URI->new( $self->samweb_server.'/sam/mu2e/api' );
     $url->query_form( 'format' => 'plain');
     my $res = $self->ua->get($url);
     if($res->is_success) {
@@ -221,7 +215,7 @@ sub declareFile {
     $self->ensureDatasetDefinition($jstext, $inopts);
 
     # Create a request
-    my $req = HTTP::Request->new(POST => $self->write_server . '/sam/mu2e/api/files');
+    my $req = HTTP::Request->new(POST => $self->samweb_server . '/sam/mu2e/api/files');
     $req->content_type('application/json');
     $req->content($jstext);
 
@@ -288,7 +282,7 @@ sub listFiles {
     my $opts = $inopts // {};
     my $verbosity = $$opts{'verbosity'} // 1;
 
-    my $url = URI->new( $self->read_server.'/sam/mu2e/api/files/list' );
+    my $url = URI->new( $self->samweb_server.'/sam/mu2e/api/files/list' );
     $url->query_form( 'format' => 'plain', 'dims' => $samquery );
 
     my $res = $self->ua->get($url);
@@ -321,7 +315,7 @@ sub listDefinitions {
     my $opts = $inopts // {};
     my $verbosity = $$opts{'verbosity'} // 1;
 
-    my $url = URI->new( $self->read_server.'/sam/mu2e/api/definitions/list' );
+    my $url = URI->new( $self->samweb_server.'/sam/mu2e/api/definitions/list' );
     $url->query_form( 'format' => 'plain');
     my $res = $self->ua->get($url);
     if($res->is_success) {
@@ -345,7 +339,7 @@ sub listDefinitions {
 #================================================================
 sub describeDatasetDefinition {
     my ($self, $dsname) = @_;
-    my $url = URI->new( $self->read_server.'/sam/mu2e/api/definitions/name/'.$dsname.'/describe' );
+    my $url = URI->new( $self->samweb_server.'/sam/mu2e/api/definitions/name/'.$dsname.'/describe' );
     $url->query_form( 'format' => 'plain' );
     my $res = $self->ua->get($url);
     return $res;
@@ -381,7 +375,7 @@ sub ensureDatasetDefinition {
 
     # We need to create a definition for $dsname
     my $res = $self->ua->request(
-        POST $self->write_server.'/sam/mu2e/api/definitions/create',
+        POST $self->samweb_server.'/sam/mu2e/api/definitions/create',
         Content => {
             'name' => $dsname,
             'dims'=>"dh.dataset=$dsname",
@@ -429,7 +423,7 @@ sub getFileMetadata {
     my $allowedFailCodes = $$opts{'allowedFailCodes'} // [];
     my $noRetryCodes = $$opts{'noRetryCodes'} // [];
 
-    my $req = HTTP::Request->new(GET => $self->read_server.'/sam/mu2e/api/files/name/'.$filename.'/metadata?format=json');
+    my $req = HTTP::Request->new(GET => $self->samweb_server.'/sam/mu2e/api/files/name/'.$filename.'/metadata?format=json');
 
     my $numtries = 0;
     my $delay = $self->delay;
@@ -536,7 +530,7 @@ sub maybeAddLocationToSam {
 
             my $t1 = $timing ? [gettimeofday()] : undef;
             my $res = $self->ua->request(
-                POST $self->write_server.'/sam/mu2e/api/files/name/'.$fn.'/locations',
+                POST $self->samweb_server.'/sam/mu2e/api/files/name/'.$fn.'/locations',
                 Content => {'add' => $location }
                 );
 

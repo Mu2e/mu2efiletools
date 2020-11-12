@@ -61,7 +61,7 @@ sub retireFile {
           HTTP_BAD_REQUEST, # bad metadata, e.g. unknown parent
         ];
 
-    my $req = HTTP::Request->new(POST => $sw->write_server .'/sam/mu2e/api/files/name/'. $filename .'/retired_date' );
+    my $req = HTTP::Request->new(POST => $sw->samweb_server .'/sam/mu2e/api/files/name/'. $filename .'/retired_date' );
     # No body in the POST request
     $req->header('Content-Length'=>0);
 
@@ -111,7 +111,7 @@ sub retireFile {
 sub deleteDatasetDefinition($) {
     my ($dsname) = @_;
 
-    my $req = HTTP::Request->new(POST => $sw->write_server .'/sam/mu2e/api/definitions/name/'. $dsname . '/delete' );
+    my $req = HTTP::Request->new(POST => $sw->samweb_server .'/sam/mu2e/api/definitions/name/'. $dsname . '/delete' );
 
     # No body in the POST request
     $req->header('Content-Length'=>0);
