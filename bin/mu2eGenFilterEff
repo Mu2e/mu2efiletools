@@ -3,9 +3,38 @@
 # A.Gaponenko, 2016
 #
 
+
+package DatasetEffSummary;
+use strict;
+
+sub fill {
+    my ($self, $json) = @_;
+    my $nfiles = $self->nfiles + 1;
+    $self->nfiles($nfiles);
+
+    die "Error: no dh.gencount in metadata for file " . $json->{'file_name'} . "\n"
+        unless defined $json->{'dh.gencount'};
+
+    my $genevents = $self->genevents + $json->{'dh.gencount'};
+    $self->genevents($genevents);
+
+    # Due to a bug in SAM (INC000001108858) event counts zero does not get
+    # stored.  Workaround that with //0.
+    my $passedevents = $self->passedevents + ($json->{'event_count'}//0);
+    $self->passedevents($passedevents);
+
+    return $self;
+}
+
+use Class::Struct DatasetEffSummary => [dsname=>'$', nfiles=>'$', genevents=>'$', passedevents=>'$'];
+
+
+package main;
 use strict;
 
 use English '-no_match_vars';
+use List::Util qw(min);
+
 use Getopt::Long;
 use LWP::UserAgent;
 use HTTP::Request::Common;
@@ -21,39 +50,22 @@ use Data::Dumper;
 use lib dirname($0);
 use Mu2eSWI;
 
-my $verbosity=1;
+
+
+my $default_verbosity=1;
+my $default_chunkSize = 1000;
+
+my $verbosity = $default_verbosity;
+my $chunkSize = $default_chunkSize;
+
 my $sw = Mu2eSWI->new;
 
-my %opt = ( verbosity=>\$verbosity,
-            help=>0,
+my %opt = ( 'chunkSize' => \$chunkSize,
+            'verbosity' => \$verbosity,
+            'help' => 0,
             %{$sw->optDefaults},
     );
 
-# stat counters for the processing
-my $numFilesTotal = 0;
-my $numFilesProcessed = 0;
-my $genevents = 0;
-my $passedevents = 0;
-
-
-#================================================================
-sub processFile($$) {
-    my ($sw, $file) = @_;
-    ++$numFilesProcessed;
-
-    print "Working on $file\n";
-    my $js = $sw->getFileMetadata($file);
-    #print Dumper($js),"\n";
-
-    if (defined $js->{'dh.gencount'}) {
-        $genevents += $js->{'dh.gencount'};
-        $passedevents += $js->{'event_count'} // 0;
-    }
-    if($genevents) {
-        my $eff = $passedevents / $genevents ;
-        print "Processed $numFilesProcessed / $numFilesTotal files, eff = $eff  [ $passedevents / $genevents ]  on ",scalar(localtime()),"\n" if $verbosity > 0;
-    }
-}
 
 #================================================================
 sub processDataset {
@@ -62,18 +74,37 @@ sub processDataset {
     # make sure cmdline parameters make sense
     Mu2eDSName->parse($dsname);
 
-    my @fl = $sw->listFiles("dh.dataset=$dsname with availability anylocation");
-    $numFilesTotal = scalar(@fl);
+    my $summary = DatasetEffSummary->new(dsname=>$dsname, nfiles=>0, genevents=>0, passedevents=>0);
 
-    if($numFilesTotal > 0) {
-        for my $file (@fl) {
-            processFile($sw, $file);
+    my @fl = $sw->listFiles("dh.dataset=$dsname with availability anylocation");
+    my $numFilesTotal = scalar(@fl);
+
+    die "Error: there are no records matching dataset name $dsname\n"
+        unless $numFilesTotal;
+
+    print "Processing dataset  $dsname with $numFilesTotal files\n" if $verbosity > 1;
+
+    for(my $numProcessed = 0; $numProcessed < $numFilesTotal; $numProcessed += $chunkSize) {
+        my @indexes = ( $numProcessed .. min($numProcessed + $chunkSize, $numFilesTotal) - 1);
+        my @chunk = @fl [ @indexes ];
+        #print "Got indexes = @indexes    \tchunk = @chunk\n";
+
+
+        my $res = $sw->ua->request(
+            POST $sw->samweb_server.'/sam/mu2e/api/files/metadata',
+            Content => { 'file_name' => \@chunk }
+            );
+
+        print Dumper($res),"\n" if $verbosity > 9;
+
+        my $jstop = decode_json ($res->content);
+
+        foreach my $js (@$jstop) {
+            $summary->fill($js);
         }
     }
-    else {
-        print "No files in dataset $dsname. Nothing to do on ",
-        scalar(localtime()),".\n";
-    }
+
+    return $summary;
 }
 
 #================================================================
@@ -86,12 +117,17 @@ the total number of events generated in the initial stage of the
 simulation, in the jobs that ran with the EmptyEvent source.
 
 Usage:
-        $self [options] <DatasetName>
+        $self [options] <DatasetName> [<DatasetName2> ...]
 
 Options:
 EOF
 .  #$sw->optDocString(' 'x4, ' 'x7) .
 <<EOF
+
+    --chunkSize=<int>       The number of metadata to request in a single SAMWEB transaction.
+                            The default is $default_chunkSize.
+
+    --verbosity=<int>       Set verbosity level. The default is $default_verbosity.
 
     --help                  Print this message.
 EOF
@@ -100,7 +136,9 @@ EOF
 
 # Process command line opts.
 GetOptions(\%opt,
-           "help",
+    "chunkSize=i",
+    "verbosity=i",
+    "help",
            @{$sw->optSpec},
            )
     or die "\nError processing command line options.\n";
@@ -114,7 +152,12 @@ die "ERROR: Exactly one dataset name must be specified.  Try the --help option.\
     unless $#ARGV >=  0;
 
 foreach my $ds (@ARGV) {
-    processDataset($ds);
+    my $res = processDataset($ds);
+    print $res->dsname
+    . "\t" . $res->genevents
+    . "\t" . $res->passedevents
+    . "\t" . ($res->passedevents /  $res->genevents)
+    . "\n";
 }
 
 exit 0;
