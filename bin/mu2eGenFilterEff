@@ -33,6 +33,8 @@ package main;
 use strict;
 
 use English '-no_match_vars';
+use Fcntl;
+
 use List::Util qw(min);
 
 use Getopt::Long;
@@ -52,15 +54,18 @@ use Mu2eSWI;
 
 
 
-my $default_verbosity=1;
+my $default_verbosity=2;
 my $default_chunkSize = 1000;
 
 my $verbosity = $default_verbosity;
 my $chunkSize = $default_chunkSize;
 
+my $outfile = '';
+
 my $sw = Mu2eSWI->new;
 
-my %opt = ( 'chunkSize' => \$chunkSize,
+my %opt = ( 'outfile' => \$outfile,
+            'chunkSize' => \$chunkSize,
             'verbosity' => \$verbosity,
             'help' => 0,
             %{$sw->optDefaults},
@@ -82,7 +87,7 @@ sub processDataset {
     die "Error: there are no records matching dataset name $dsname\n"
         unless $numFilesTotal;
 
-    print "Processing dataset  $dsname with $numFilesTotal files\n" if $verbosity > 1;
+    print "Processing dataset  $dsname with $numFilesTotal files\n" if $verbosity > 0;
 
     for(my $numProcessed = 0; $numProcessed < $numFilesTotal; $numProcessed += $chunkSize) {
         my @indexes = ( $numProcessed .. min($numProcessed + $chunkSize, $numFilesTotal) - 1);
@@ -102,6 +107,14 @@ sub processDataset {
         foreach my $js (@$jstop) {
             $summary->fill($js);
         }
+
+        print "\teff = ",
+        ($summary->passedevents /  $summary->genevents),
+        " (", $summary->passedevents, " / ", $summary->genevents, ")",
+        " after processing ",$summary->nfiles,
+        " files of ",$summary->dsname,
+        "\n"
+            if $verbosity > 1;
     }
 
     return $summary;
@@ -117,12 +130,14 @@ the total number of events generated in the initial stage of the
 simulation, in the jobs that ran with the EmptyEvent source.
 
 Usage:
-        $self [options] <DatasetName> [<DatasetName2> ...]
+        $self --outfile=<filename>  [options] <DatasetName> [<DatasetName2> ...]
 
 Options:
 EOF
 .  #$sw->optDocString(' 'x4, ' 'x7) .
 <<EOF
+
+    --outfile=<filename>    Proditions-formatted results will be written there.
 
     --chunkSize=<int>       The number of metadata to request in a single SAMWEB transaction.
                             The default is $default_chunkSize.
@@ -136,6 +151,7 @@ EOF
 
 # Process command line opts.
 GetOptions(\%opt,
+    "outfile=s",
     "chunkSize=i",
     "verbosity=i",
     "help",
@@ -148,17 +164,30 @@ if($opt{'help'}) {
     exit 0;
 }
 
-die "ERROR: Exactly one dataset name must be specified.  Try the --help option.\n"
+die "ERROR: At least one dataset name must be specified.  Try the --help option.\n"
     unless $#ARGV >=  0;
 
+
+die "ERROR: an output file must be specified. Try the --help option\n"
+    unless $outfile;
+
+sysopen(my $outfh, $outfile, O_WRONLY | O_EXCL | O_CREAT)
+    or die "Error creating $outfile: $!\n";
+
+print $outfh "TABLE SimEfficiencies IOV\n";
 foreach my $ds (@ARGV) {
     my $res = processDataset($ds);
-    print $res->dsname
-    . "\t" . $res->genevents
-    . "\t" . $res->passedevents
-    . "\t" . ($res->passedevents /  $res->genevents)
+
+    # The Proditions table row:
+    # Row(std::string tag, unsigned long numerator, unsigned long denominator, double eff)
+    print $outfh $res->dsname
+    . ",\t" . $res->passedevents
+    . ",\t" . $res->genevents
+    . ",\t" . ($res->passedevents /  $res->genevents)
     . "\n";
 }
+
+close $outfh or die "Error closing output file $outfile: $!\n";
 
 exit 0;
 
