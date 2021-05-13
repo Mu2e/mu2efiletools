@@ -83,8 +83,13 @@ sub getEnstoreInfo($) {
     my $l1fn = dirname($pathname) . '/.(use)(1)(' . basename($pathname) . ')';
     open(my $FH, '<', $l1fn) or return undef; # not on tape yet
     my $file_bfid = <$FH>;
-    die "Can not get BFID from pnfs layer 1  $l1fn: $! on ".localtime()."\n"
-        unless defined $file_bfid;
+
+    # Having a L1 file visible but emtpy for some time seems to be the new normal.
+    # Do not die on that, treat it as no-tape-label-yet.
+    #
+    # die "Can not get BFID from pnfs layer 1  $l1fn: $! on ".localtime()."\n" unless defined $file_bfid;
+    return undef unless defined $file_bfid;
+
     chomp $file_bfid;
 
     my ($fi, $file_info) = queryBFID($file_bfid);
