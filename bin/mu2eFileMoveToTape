@@ -120,9 +120,12 @@ sub maybeRegisterFileInSAM($$$) {
 
     my $fn = Mu2eFilename->parse(basename($dstfile));
 
+    my $file_size = 0;
+    $file_size += -s $dstfile unless $dryrun;
+
     my $jsstruct = { data_tier => $fn->tier,
                      file_name => $fn->basename,
-                     file_size => 0 + (-s $dstfile),
+                     file_size => $file_size,
                      file_type => 'other',
                      file_format => $fn->extension,
                      'dh.owner' => $fn->owner,
