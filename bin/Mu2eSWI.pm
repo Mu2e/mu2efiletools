@@ -344,7 +344,7 @@ sub listDefinitions {
 #================================================================
 sub describeDatasetDefinition {
     my ($self, $dsname) = @_;
-    my $url = URI->new( $self->samweb_server.'/sam/mu2e/api/definitions/name/'.$dsname.'/describe' );
+    my $url = URI->new( $self->samweb_server.'/sam/mu2e/api/definitions/name/'.$dsname );
     $url->query_form( 'format' => 'plain' );
     my $res = $self->ua->get($url);
     return $res;
