@@ -111,7 +111,7 @@ sub retireFile {
 sub deleteDatasetDefinition($) {
     my ($dsname) = @_;
 
-    my $req = HTTP::Request->new(POST => $sw->samweb_server .'/sam/mu2e/api/definitions/name/'. $dsname . '/delete' );
+    my $req = HTTP::Request->new(DELETE => $sw->samweb_server .'/sam/mu2e/api/definitions/name/'. $dsname );
 
     # No body in the POST request
     $req->header('Content-Length'=>0);
