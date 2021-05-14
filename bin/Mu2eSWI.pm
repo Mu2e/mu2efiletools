@@ -109,7 +109,6 @@ sub new {
     my $self = $class->SUPER::new(
         delay=>60,
         maxtries=>3,
-        samweb_server=>'http://samweb.fnal.gov:8480',
         samweb_server=>'https://samweb.fnal.gov:8483',
         timeout => 3600,
         );
