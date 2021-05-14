@@ -100,6 +100,12 @@ sub _agentID() {
 sub ua {
     my ($self) = @_;
     $self->{'Mu2eSWI::_ua'}->timeout($self->timeout);
+
+    # The redirect number is arbirtary, I just want to have it explicitly
+    # non zero hero to satisfy the samweb interface
+    # https://cdcvs.fnal.gov/redmine/projects/sam-web/wiki/Interface_definitions/81/diff
+    $self->{'Mu2eSWI::_ua'}->max_redirect(8);
+
     return $self->{'Mu2eSWI::_ua'};
 }
 
