@@ -55,7 +55,7 @@ use Mu2eSWI;
 
 
 my $default_verbosity=2;
-my $default_chunkSize = 1000;
+my $default_chunkSize = 100;
 my $default_header = 'TABLE SimEfficiencies2';
 
 my $verbosity = $default_verbosity;
