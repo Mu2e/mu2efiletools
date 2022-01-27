@@ -56,15 +56,18 @@ use Mu2eSWI;
 
 my $default_verbosity=2;
 my $default_chunkSize = 1000;
+my $default_header = 'TABLE SimEfficiencies2';
 
 my $verbosity = $default_verbosity;
 my $chunkSize = $default_chunkSize;
+my $header = $default_header;
 
 my $outfile = '';
 
 my $sw = Mu2eSWI->new;
 
 my %opt = ( 'outfile' => \$outfile,
+            'header' => \$header,
             'chunkSize' => \$chunkSize,
             'verbosity' => \$verbosity,
             'help' => 0,
@@ -139,6 +142,9 @@ EOF
 
     --outfile=<filename>    Proditions-formatted results will be written there.
 
+    --header=<string>       A text to be used for the first line of the file.
+                            The default is '$default_header'.
+
     --chunkSize=<int>       The number of metadata to request in a single SAMWEB transaction.
                             The default is $default_chunkSize.
 
@@ -152,6 +158,7 @@ EOF
 # Process command line opts.
 GetOptions(\%opt,
     "outfile=s",
+    "header=s",
     "chunkSize=i",
     "verbosity=i",
     "help",
@@ -174,7 +181,7 @@ die "ERROR: an output file must be specified. Try the --help option\n"
 sysopen(my $outfh, $outfile, O_WRONLY | O_EXCL | O_CREAT)
     or die "Error creating $outfile: $!\n";
 
-print $outfh "TABLE SimEfficiencies IOV\n";
+print $outfh $header . "\n";
 foreach my $ds (@ARGV) {
     my $res = processDataset($ds);
 
