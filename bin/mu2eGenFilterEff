@@ -68,6 +68,7 @@ my $sw = Mu2eSWI->new;
 
 my %opt = ( 'outfile' => \$outfile,
             'header' => \$header,
+            'writeFullDatasetName' => 0,
             'chunkSize' => \$chunkSize,
             'verbosity' => \$verbosity,
             'help' => 0,
@@ -145,6 +146,9 @@ EOF
     --header=<string>       A text to be used for the first line of the file.
                             The default is '$default_header'.
 
+    --writeFullDatasetName  Switch to writing full dataset names to the output file
+                            instead of the default dataset description field.
+
     --chunkSize=<int>       The number of metadata to request in a single SAMWEB transaction.
                             The default is $default_chunkSize.
 
@@ -159,6 +163,7 @@ EOF
 GetOptions(\%opt,
     "outfile=s",
     "header=s",
+    "writeFullDatasetName",
     "chunkSize=i",
     "verbosity=i",
     "help",
@@ -185,9 +190,12 @@ print $outfh $header . "\n";
 foreach my $ds (@ARGV) {
     my $res = processDataset($ds);
 
+    my $ds = Mu2eDSName->parse($res->dsname);
+    my $dstag = $opt{'writeFullDatasetName'} ? $ds->dsname : $ds->description;
+
     # The Proditions table row:
     # Row(std::string tag, unsigned long numerator, unsigned long denominator, double eff)
-    print $outfh $res->dsname
+    print $outfh $dstag
     . ",\t" . $res->passedevents
     . ",\t" . $res->genevents
     . ",\t" . ($res->passedevents /  $res->genevents)
