@@ -67,7 +67,7 @@ my $outfile = '';
 my $sw = Mu2eSWI->new;
 
 my %opt = ( 'outfile' => \$outfile,
-            'header' => \$header,
+            'firstLine' => \$header,
             'writeFullDatasetName' => 0,
             'chunkSize' => \$chunkSize,
             'verbosity' => \$verbosity,
@@ -143,7 +143,7 @@ EOF
 
     --outfile=<filename>    Proditions-formatted results will be written there.
 
-    --header=<string>       A text to be used for the first line of the file.
+    --firstLine=<string>    A text to be used for the first line of the file.
                             The default is '$default_header'.
 
     --writeFullDatasetName  Switch to writing full dataset names to the output file
@@ -162,7 +162,7 @@ EOF
 # Process command line opts.
 GetOptions(\%opt,
     "outfile=s",
-    "header=s",
+    "firstLine=s",
     "writeFullDatasetName",
     "chunkSize=i",
     "verbosity=i",
