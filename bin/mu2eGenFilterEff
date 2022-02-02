@@ -91,10 +91,15 @@ sub processDataset {
     die "Error: there are no records matching dataset name $dsname\n"
         unless $numFilesTotal;
 
-    print "Processing dataset  $dsname with $numFilesTotal files\n" if $verbosity > 0;
+    my $numFilesToUse =  $opt{'maxFilesToProcess'} // $numFilesTotal;
+    if($numFilesToUse > $numFilesTotal) {
+        $numFilesToUse = $numFilesTotal;
+    }
 
-    for(my $numProcessed = 0; $numProcessed < $numFilesTotal; $numProcessed += $chunkSize) {
-        my @indexes = ( $numProcessed .. min($numProcessed + $chunkSize, $numFilesTotal) - 1);
+    print "Processing dataset  $dsname, using $numFilesToUse out of $numFilesTotal files\n" if $verbosity > 0;
+
+    for(my $numProcessed = 0; $numProcessed < $numFilesToUse; $numProcessed += $chunkSize) {
+        my @indexes = ( $numProcessed .. min($numProcessed + $chunkSize, $numFilesToUse) - 1);
         my @chunk = @fl [ @indexes ];
         #print "Got indexes = @indexes    \tchunk = @chunk\n";
 
@@ -143,18 +148,20 @@ EOF
 
     --outfile=<filename>    Proditions-formatted results will be written there.
 
-    --firstLine=<string>    A text to be used for the first line of the file.
-                            The default is '$default_header'.
+    --firstLine=<string>       A text to be used for the first line of the file.
+                               The default is '$default_header'.
 
-    --writeFullDatasetName  Switch to writing full dataset names to the output file
-                            instead of the default dataset description field.
+    --writeFullDatasetName     Switch to writing full dataset names to the output file
+                               instead of the default dataset description field.
 
-    --chunkSize=<int>       The number of metadata to request in a single SAMWEB transaction.
-                            The default is $default_chunkSize.
+    --chunkSize=<int>          The number of metadata to request in a single SAMWEB transaction.
+                               The default is $default_chunkSize.
 
-    --verbosity=<int>       Set verbosity level. The default is $default_verbosity.
+    --maxFilesToProcess=<int>  Do not query more than the given number of files per dataset.
 
-    --help                  Print this message.
+    --verbosity=<int>          Set verbosity level. The default is $default_verbosity.
+
+    --help                     Print this message.
 EOF
 ;
 }
@@ -166,6 +173,7 @@ GetOptions(\%opt,
     "writeFullDatasetName",
     "chunkSize=i",
     "verbosity=i",
+    "maxFilesToProcess=i",
     "help",
            @{$sw->optSpec},
            )
@@ -179,6 +187,8 @@ if($opt{'help'}) {
 die "ERROR: At least one dataset name must be specified.  Try the --help option.\n"
     unless $#ARGV >=  0;
 
+die "ERROR: Illegal maxFilesToProcess = ",$opt{'maxFilesToProcess'},"\n"
+    unless ($opt{'maxFilesToProcess'} // 1) > 0;
 
 die "ERROR: an output file must be specified. Try the --help option\n"
     unless $outfile;
