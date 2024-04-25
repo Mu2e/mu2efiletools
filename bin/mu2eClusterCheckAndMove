@@ -37,6 +37,8 @@ use Class::Struct Mu2eLogFileInfo => [
     payload_started=>'$',
     payload_ok=>'$',
     parent_fcl=>'$',
+    mu2ejobname=>'$',
+    mu2ejobindex=>'$',
     job_stats=>'Mu2eJobStats',
     ];
 
@@ -166,6 +168,7 @@ sub processLogFile($) {
     my %workerFileDigest;
 
     my $parent_fcl;
+    my ($mu2ejobname, $mu2ejobindex);
     my $job_stats = Mu2eJobStats->new;
 
     my $parentRE =  $opt{'oldhack'} ?
@@ -186,6 +189,18 @@ sub processLogFile($) {
                 $parent_fcl = $1;
             }
 
+            # FIXME: hack using jobdef instead of jobname
+            if($line =~ m/^mu2ejobsub +jobdef *= *(.*)$/) {
+                $mu2ejobname = basename($1);
+            }
+            if($line =~ m/^mu2ejobsub +jobname *= *(.*)$/) {
+                $mu2ejobname = $1;
+            }
+
+            if($line =~ m/^mu2ejobsub +jobindex *= *(.*)$/) {
+                $mu2ejobindex = $1;
+            }
+
             if($line =~ m/^mu2egrid exit status 0 ?.*$/) {
                 $mu2egrid_status_ok = 1;
             }
@@ -199,8 +214,8 @@ sub processLogFile($) {
                 $job_stats->maxres($3);
             }
 
-            if($line =~ m/^mu2eprodsys\s*diskUse\s*=\s*(\d+)\s/) {
-                $job_stats->disk($1);
+            if($line =~ m/^(mu2eprodsys|mu2ejobsub|mu2egrid)\s*diskUse\s*=\s*(\d+)\s/) {
+                $job_stats->disk($2);
             }
 
             if($line =~ m/^Starting *on *host *Linux *([^\s]+)\s/) {
@@ -261,8 +276,8 @@ sub processLogFile($) {
 
         }
 
-        if($payload_started and not defined $parent_fcl) {
-            die "Did not find information about parent fcl in $logFileName\nTry using the --oldhack option?\n";
+        if($payload_started and not defined $parent_fcl  and not defined $mu2ejobname) {
+            die "Did not find information about parent fcl or jobname in $logFileName\n";
         }
 
         my $payload_ok = $mu2egrid_status_ok && $art_status_ok;
@@ -282,6 +297,8 @@ sub processLogFile($) {
                                     payload_started=>$payload_started,
                                     payload_ok=>$payload_ok,
                                     parent_fcl=>$parent_fcl,
+                                    mu2ejobname=>$mu2ejobname,
+                                    mu2ejobindex=>$mu2ejobindex,
                                     job_stats=>$job_stats,
             );
     }
@@ -385,11 +402,30 @@ sub isGlobalDup($$$) {
 
     my $lf = Mu2eFilename->parse(basename($logFileName));
 
-    my $parentfn = basename($loginfo->parent_fcl);
-    my $jtfn = join('.', 'job' , $lf->owner, $lf->configuration, $parentfn);
+    # a unique string to identify this job for duplicate detection
+    # and the corresponding "dataset"
+    my ($jtfn, $jtds);
+    my $parentfn; # input fcl file for mu2eprodsys case
+    if($loginfo->parent_fcl) { # handle mu2eprodsys outputs
 
-    my $parentds = Mu2eFilename->parse($parentfn)->dataset->dsname;
-    my $jtds = join('.', 'job' , $lf->owner, $lf->configuration, $parentds);
+        $parentfn = basename($loginfo->parent_fcl);
+
+        my $parentds = Mu2eFilename->parse($parentfn)->dataset->dsname;
+
+        $jtfn = join('.', 'job' , $lf->owner, $lf->configuration, $parentfn);
+        $jtds = join('.', 'job' , $lf->owner, $lf->configuration, $parentds);
+
+    }
+    elsif($loginfo->mu2ejobname) {
+        # for mu2ejobsub it is sufficient to use the log file name, derived from jobname and index
+        $jtfn = 'job.' . basename($logFileName);
+        $jtds = 'job.' . Mu2eFilename->parse(basename($logFileName))->dataset->dsname;
+
+        # $parentfn = $loginfo->mu2ejobname; # this requires that the jobdef file is registered in sam
+    }
+    else {
+        die "isGlobalDup(): got loginfo with neither parent_fcl nor mu2ejobname defined";
+    }
 
     my $st = $loginfo->job_stats;
 
@@ -401,11 +437,12 @@ sub isGlobalDup($$$) {
         ++$cnt;
     }
 
+
     my $jsstruct = { data_tier => 'job',
                      file_name => $jtfn,
                      file_size => 0,
                      file_type => 'other',
-                     parents => [ $parentfn ],
+
                      'dh.configuration' => $lf->configuration,
                      'dh.owner' => $lf->owner,
                      'dh.sequencer' => $lf->sequencer,
@@ -422,6 +459,10 @@ sub isGlobalDup($$$) {
                      'job.node' => $st->node,
                      'job.site' => $st->site,
     };
+
+    if(defined $parentfn) {
+        $jsstruct->{'parents'} = [ $parentfn ];
+    }
 
     my $json_text = to_json($jsstruct);
 
