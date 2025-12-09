@@ -129,39 +129,64 @@ sub new {
 }
 
 #================================================================
+# Implement WLCG token discovery.
+#
+# Per https://zenodo.org/record/3937438 :
+#
+# "If a potential token is found at a step, then the discovery
+# implementation MUST strip all whitespace on the left and right sides
+# of the string (we define whitespace the same way as the C99 isspace
+# function: space, form-feed ( \f ), newline ( \n ), carriage return (
+# \r ), horizontal tab ( \t ), and vertical tab ( \v )). Upon finding a
+# valid token according to section 2.1 of RFC6750, the discovery
+# procedure MUST terminate and return this token. Upon finding an empty
+# token, the discovery implementation should continue with the next
+# step."
+
+sub checkToken {
+    my ($tok) = @_;
+    if(defined $tok) {
+        $tok =~ s/^\s+//a;
+        $tok =~ s/\s+$//a;
+        return $tok unless $tok eq '';
+    }
+    return undef;
+}
+
+sub read_token_file {
+    my ($fn) = @_;
+    return undef unless defined $fn and -e $fn;
+    open my $fh, '<', $fn or die "error opening '$fn': $!";
+    return do { local $/; <$fh> };
+}
+
+sub get_bearer_token {
+    my $basename = 'bt_u' . $EUID;
+
+    my $xdgfile = defined $ENV{'XDG_RUNTIME_DIR'} ? $ENV{'XDG_RUNTIME_DIR'} . '/' . $basename : undef;
+    my $tmpfile = '/tmp/' . $basename;
+
+    return
+        checkToken($ENV{'BEARER_TOKEN'}) //
+        checkToken(read_token_file($ENV{'BEARER_TOKEN_FILE'})) //
+        checkToken(read_token_file($xdgfile)) //
+        checkToken(read_token_file($tmpfile)) ;
+}
+
 sub authConfig {
     my ($self) = @_;
 
-    my $numvars = (defined $ENV{'HTTPS_CERT_FILE'} ? 1 : 0)
-        + (defined $ENV{'HTTPS_KEY_FILE'} ? 1 : 0);
+    my $token = get_bearer_token();
 
-    if($numvars == 1) {
-        croak "Error: either both or none of HTTPS_CERT_FILE, HTTPS_KEY_FILE environment variables should be defined.\n";
+    if(defined $token) {
+        $self->{'Mu2eSWI::_ua'}->default_headers
+            ->header(Authorization => 'Bearer ' . $token );
     }
-    elsif($numvars == 2) {
-        for my $name ('HTTPS_CERT_FILE', 'HTTPS_KEY_FILE') {
-            croak "Error: the file $ENV{$name} specified  by environment variable $name is not readable.\n"
-                unless -r $ENV{$name};
-        }
+    else {
+        croak "Error: did not find an authentication token.\n"
+            . "Run Mu2e's getToken (or htgettoken) and try again\n";
     }
 
-    my $filename = undef;
-    if($numvars == 0) {
-        $filename = '/tmp/x509up_u'.$EUID;
-        croak "Error: no HTTPS_KEY_FILE and HTTPS_CERT_FILE in the environment, and file $filename does not exist.\n"
-            ."Run kx509 and try again.\n"
-            unless -r $filename;
-    }
-
-    $self->{'Mu2eSWI::_ua'} ->ssl_opts(
-        SSL_cert_file => $ENV{'HTTPS_CERT_FILE'} // $filename,
-        SSL_key_file => $ENV{'HTTPS_KEY_FILE'} // $filename,
-        SSL_ca_path =>  $ENV{'HTTPS_CA_DIR'}  // '/etc/grid-security/certificates',
-        # SSL_ca_file => $ENV{'HTTPS_CA_FILE'} // $filename,
-        );
-
-
-    #print "New ssl_opts: ", Dumper($self->{'Mu2eSWI::_ua'} ->ssl_opts), "\n";
     return 1;
 }
 
